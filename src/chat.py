@@ -616,6 +616,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._use_llama_server = False
         self._llama_server_process = None
         self._mcp_server_process = None
+        self._last_local_model: Optional[str] = None  # Store local model when switching modes
         
         # Automation mode for testing
         self.input_file = input_file
@@ -1513,10 +1514,26 @@ class ChatWindow(QtWidgets.QMainWindow):
         """Handle mode change - refresh model list from appropriate source."""
         logger.info(f"Mode changed to: {mode}")
         if mode == "lm_studio":
+            # Store current local model before switching to LM Studio
+            if self._model_combo and self._model_combo.count() > 0:
+                self._last_local_model = self._model_combo.currentData() or self._model_combo.currentText()
+                logger.debug(f"Stored local model for later: {self._last_local_model}")
+            
             self._load_lm_studio_models()
             self._fetch_lm_studio_current_model()
         else:
+            # Switching back to Local mode
             self._populate_models_with_capabilities()
+            
+            # Restore the last selected local model if available
+            if self._last_local_model and self._model_combo:
+                # Find and select the previously selected model
+                for i in range(self._model_combo.count()):
+                    if self._model_combo.itemData(i) == self._last_local_model:
+                        self._model_combo.setCurrentIndex(i)
+                        logger.info(f"Restored local model: {self._last_local_model}")
+                        break
+            
             # Update current model display for local mode
             if self._model_combo and self._model_combo.count() > 0:
                 # Use userData which has the full path (maker/model-name), not just display text
