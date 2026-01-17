@@ -145,10 +145,10 @@ All settings are in `settings.yml`. Key configurations:
 - Models respond naturally like LM Studio without announcing tools
 - Enable only for capable models (>= 8B parameters with tool support)
 
-**LM Studio Integration:**
+**LM Studio Integration (Optional):**
 - Use `test_mcp/lm_studio_server.py` to delegate complex queries to LM Studio
-- Requires LM Studio running with API enabled (http://localhost:1234)
-- Small local models can query more capable LM Studio models for reasoning
+- ChatLlama works standalone with llama-cpp-python (no LM Studio required)
+- Optional feature for querying more capable models when needed
 
 See `config/settings.yml.template` for all available options.
 

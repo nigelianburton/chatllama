@@ -38,14 +38,16 @@ Only enable `tool_integration_enabled: true` when:
 2. You need the model to invoke MCP tools
 3. The model is trained for function calling (Qwen, Nemotron, etc.)
 
-## LM Studio Integration
+## LM Studio Integration (Optional)
 
-For complex tasks beyond your local model's capability:
+**ChatLlama works standalone without LM Studio.** This is an optional feature for delegating complex tasks.
+
+If you want to query LM Studio for enhanced reasoning:
 
 **1. Start LM Studio API:**
 - Load a capable model in LM Studio
 - Enable API server (Settings → API → Start Server)
-- Default: http://localhost:1234
+- Note the server address (e.g., http://127.0.0.1:11013)
 
 **2. Enable LM Studio MCP Server:**
 ```yaml

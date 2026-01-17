@@ -2,9 +2,11 @@
 
 Three example Model Context Protocol (MCP) servers built with fastmcp for ChatLlama.
 
-## 1. LM Studio Query Server - `lm_studio_server.py` ⭐ NEW
+## 1. LM Studio Query Server - `lm_studio_server.py` ⭐ OPTIONAL
 
-Query LM Studio's API for complex reasoning tasks. Perfect for delegating difficult queries from smaller models to more capable ones.
+**Note:** This is an optional feature for delegating complex queries. ChatLlama works standalone without LM Studio.
+
+Query LM Studio's API for complex reasoning tasks when you need to delegate difficult queries from smaller models to more capable ones.
 
 **Features:**
 - OpenAI-compatible API integration
@@ -17,7 +19,7 @@ Query LM Studio's API for complex reasoning tasks. Perfect for delegating diffic
 
 **Requirements:**
 - LM Studio running with a model loaded
-- API server enabled (default: http://localhost:1234)
+- API server enabled (check LM Studio's server address, e.g., http://127.0.0.1:11013)
 
 **Run:**
 ```bash

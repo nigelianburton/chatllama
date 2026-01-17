@@ -17,7 +17,8 @@ logger = logging.getLogger("lm-studio-mcp")
 server = Server("lm-studio-query")
 
 # LM Studio API configuration (OpenAI-compatible)
-LM_STUDIO_API_URL = "http://localhost:1234/v1"
+# Default port is 1234, but can vary (e.g., 11013 for multi-instance)
+LM_STUDIO_API_URL = "http://127.0.0.1:11013/v1"
 LM_STUDIO_CHAT_ENDPOINT = f"{LM_STUDIO_API_URL}/chat/completions"
 
 
@@ -105,8 +106,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
         except requests.exceptions.ConnectionError:
             return [TextContent(
                 type="text",
-                text="Error: Cannot connect to LM Studio API at http://localhost:1234. "
-                     "Please ensure LM Studio is running with a model loaded."
+                text="Error: Cannot connect to LM Studio API at http://127.0.0.1:11013. "
+                     "Please ensure LM Studio is running with a model loaded and API server is enabled."
             )]
         except requests.exceptions.Timeout:
             return [TextContent(
