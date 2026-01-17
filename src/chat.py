@@ -430,6 +430,9 @@ class SettingsPanel(QtWidgets.QWidget):
 
         layout.addStretch(1)
         self.setLayout(layout)
+        
+        # Initialize with Local mode colors
+        self._set_mode("local")
     
     def _set_mode(self, mode: str) -> None:
         """Set the operation mode and update UI."""
