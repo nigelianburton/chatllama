@@ -440,12 +440,18 @@ class SettingsPanel(QtWidgets.QWidget):
             self.local_btn.setChecked(True)
             self.lm_studio_btn.setChecked(False)
             # Local mode: normal background
-            self.setStyleSheet("")
+            palette = self.palette()
+            palette.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor("#1e1e1e"))
+            self.setPalette(palette)
+            self.setAutoFillBackground(True)
         else:  # lm_studio
             self.local_btn.setChecked(False)
             self.lm_studio_btn.setChecked(True)
-            # LM Studio mode: different background color
-            self.setStyleSheet("QWidget#SettingsPanel { background-color: #2a3f5f; border-radius: 4px; }")
+            # LM Studio mode: blue tinted background
+            palette = self.palette()
+            palette.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor("#2a3f5f"))
+            self.setPalette(palette)
+            self.setAutoFillBackground(True)
         
         self.mode_changed.emit(mode)
     
