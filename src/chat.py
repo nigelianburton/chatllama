@@ -450,6 +450,7 @@ class SettingsPanel(QtWidgets.QWidget):
             palette.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor("#1e1e1e"))
             self.setPalette(palette)
             self.setAutoFillBackground(True)
+            logger.info("Service mode: Local (llama-cpp-python)")
         else:  # lm_studio
             self.local_btn.setChecked(False)
             self.lm_studio_btn.setChecked(True)
@@ -458,6 +459,7 @@ class SettingsPanel(QtWidgets.QWidget):
             palette.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor("#2a3f5f"))
             self.setPalette(palette)
             self.setAutoFillBackground(True)
+            logger.info("Service mode: LM Studio")
         
         self.mode_changed.emit(mode)
     
