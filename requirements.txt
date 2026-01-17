@@ -1,0 +1,12 @@
+# Core dependencies
+PyQt6>=6.9.1
+llama-cpp-python>=0.3.16
+numpy>=1.20.0
+requests>=2.32.0
+PyYAML>=6.0
+fastmcp>=2.14.3
+gputil>=1.4.0
+gguf>=0.10.0
+
+# Optional
+# pyside6>=6.9.2  # Alternative to PyQt6

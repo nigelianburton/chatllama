@@ -1,0 +1,49 @@
+[project]
+name = "chatllama"
+version = "0.1.0"
+description = "Lightweight local LLM chat interface with MCP agent support"
+authors = [{name = "nigelianburton"}]
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+
+dependencies = [
+    "PyQt6>=6.9.1",
+    "llama-cpp-python>=0.3.16",
+    "numpy>=1.20.0",
+    "requests>=2.32.0",
+    "PyYAML>=6.0",
+    "fastmcp>=2.14.3",
+    "gputil>=1.4.0",
+    "gguf>=0.10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=23.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+]
+
+[project.scripts]
+chatllama = "chat:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "W", "I", "N", "UP"]
+ignore = ["E501"]  # Line too long (handled by formatter)
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false  # Enable gradually

@@ -1,0 +1,37 @@
+llama_cpp_path: C:\Users\nigel\.lmstudio\extensions\backends\llama.cpp-win-x86_64-nvidia-cuda12-avx2-1.103.2
+models_dir: D:\LLM Models
+default_model: mradermacher\Huihui-LFM2-2.6B-Exp-abliterated-GGUF
+llama_server_port: 8000
+gpu_offload_layers: 99
+mcp_server_enabled: true
+mcp_server_command: python test_mcp/fashion_server/server.py
+tool_integration_enabled: true
+tool_preamble: 'You have access to specialized tools that extend your capabilities.
+
+
+  Tools Available:
+
+  {tools_list}
+
+
+  When a user request requires using a tool, you can suggest using it.
+
+  Include the tool name and required parameters in your response.
+
+  Format: TOOL: [tool_name] with [param1=value1, param2=value2, ...]
+
+
+  Use tools proactively when they would enhance your response to the user.
+
+  '
+model_capabilities:
+  test/model-1:
+    has_vision: true
+    has_tools: true
+    context_length: 8192
+    vram_mb: 4500
+  test/model-2:
+    has_vision: false
+    has_tools: true
+    context_length: 16384
+    vram_mb: 2500

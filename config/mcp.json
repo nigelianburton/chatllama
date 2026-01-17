@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "fashion-advisor": {
+      "command": "python",
+      "args": ["test_mcp/fashion_stdio.py"],
+      "env": {
+        "PYTHONPATH": "."
+      },
+      "description": "Simple stateless fashion advisor for 2026 looks (stdio transport, MCP protocol)",
+      "type": "stdio"
+    },
+    "fashion-curator": {
+      "command": "python",
+      "args": ["test_mcp/fashion_server/server.py"],
+      "env": {
+        "PYTHONPATH": "."
+      },
+      "description": "Stateful fashion curator server with user profiles (MCP protocol, stdio transport)",
+      "type": "stdio"
+    }
+  }
+}

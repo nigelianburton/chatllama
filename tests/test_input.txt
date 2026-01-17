@@ -1,0 +1,9 @@
+# Test input for MCP tool usage
+# Each line is a message to send to the model
+# Lines starting with # are comments and ignored
+# Use "EXIT" or "#EXIT" on a line to trigger app shutdown
+
+I'm looking for some fashion inspiration. Can you recommend a cool look for me?
+What fashion looks are available?
+I like futuristic styles. Can you suggest something with that vibe?
+EXIT
