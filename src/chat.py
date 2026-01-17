@@ -1093,14 +1093,17 @@ class ChatWindow(QtWidgets.QMainWindow):
         
         This updates the system prompt to include available tools
         so the model knows about them and can suggest using them.
+        DISABLED BY DEFAULT for clean chat experience.
         """
         if not TOOL_INTEGRATION_ENABLED:
-            logger.debug("Tool integration disabled in settings")
+            logger.debug("Tool integration disabled - clean chat mode")
+            self._messages[0]["content"] = "You are a helpful assistant."
             return
         
         tools = self._fetch_mcp_tools()
         if not tools:
             logger.warning("No tools fetched from MCP server; system prompt unchanged")
+            self._messages[0]["content"] = "You are a helpful assistant."
             return
         
         tools_list = self._format_tools_for_prompt(tools)

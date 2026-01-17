@@ -3,9 +3,19 @@ models_dir: D:\LLM Models
 default_model: mradermacher\Huihui-LFM2-2.6B-Exp-abliterated-GGUF
 llama_server_port: 8000
 gpu_offload_layers: 99
-mcp_server_enabled: true
-mcp_server_command: python test_mcp/fashion_server/server.py
-tool_integration_enabled: true
+
+# MCP Server Configuration
+# Choose one of these servers or create your own:
+# - test_mcp/fashion_server/server.py (fashion advice with user profiles)
+# - test_mcp/fashion_stdio.py (simple fashion lookup)
+# - test_mcp/lm_studio_server.py (query LM Studio for complex tasks)
+mcp_server_enabled: false
+mcp_server_command: python test_mcp/lm_studio_server.py
+
+# Tool Integration: Enable to show tools in system prompt
+# WARNING: Small models (< 8B) may role-play tools instead of using them properly
+# Disable for clean chat experience like LM Studio
+tool_integration_enabled: false
 tool_preamble: 'You have access to specialized tools that extend your capabilities.
 
 

@@ -132,30 +132,25 @@ Explain machine learning briefly
 EXIT
 ```
 
-### Environment Setup
-- **Conda**: chatllama (Python 3.11.14)
-- **LM Studio**: Backend at `C:\Users\nigel\.lmstudio\extensions\backends\llama.cpp-win-x86_64-nvidia-cuda12-avx2-1.103.2`
-- **Models**: `D:\LLM Models` with 11 discovered models
-- **Logs**: `chatllama.log` in project root + session logs in `logs/` folder
-
 ## Configuration
 
-Settings are defined in `settings.yml`:
-```yaml
-llama_cpp_path: "C:\Users\nigel\.lmstudio\extensions\backends\..."
-models_dir: "D:\LLM Models"
-default_model: "mradermacher\Huihui-LFM2-2.6B-Exp-abliterated-GGUF"
-llama_server_port: 8000
-gpu_offload_layers: 99
+All settings are in `settings.yml`. Key configurations:
+- Model paths and defaults
+- GPU offload layers and context size
+- MCP server enable/command
+- Tool integration settings (disabled by default for clean chat)
 
-mcp_server_enabled: true
-mcp_server_command: "python test_mcp/fashion_server/server.py"
+**Clean Chat Mode (Default):**
+- `tool_integration_enabled: false` - Prevents small models from role-playing tool usage
+- Models respond naturally like LM Studio without announcing tools
+- Enable only for capable models (>= 8B parameters with tool support)
 
-tool_integration_enabled: true
-tool_preamble: |
-  You have access to specialized tools...
-  {tools_list}
-```
+**LM Studio Integration:**
+- Use `test_mcp/lm_studio_server.py` to delegate complex queries to LM Studio
+- Requires LM Studio running with API enabled (http://localhost:1234)
+- Small local models can query more capable LM Studio models for reasoning
+
+See `config/settings.yml.template` for all available options.
 
 ## MCP Integration
 
@@ -163,61 +158,34 @@ tool_preamble: |
 - **MCP Protocol**: Using standard MCP stdio transport
 - **Tool Discovery**: `@server.tool()` decorators expose tools via `tools/list`
 - **Tool Advertising**: Formatted into system prompt for model awareness
-- **Tool Execution**: (Future) Parse model suggestions and execute
+- **Tool Execution**: Parse model "TOOL: [name]" output, execute via MCP, feed results back
 
-### Built-in MCP Servers
+### Test MCP Servers
+- `test_mcp/lm_studio_server.py` - Query LM Studio API (delegate complex tasks)
+- `test_mcp/fashion_server/` - Stateful server with user profiles (6 tools)
+- `test_mcp/fashion_stdio.py` - Stateless server (3 tools)
 
-**fashion-curator** (`test_mcp/fashion_server/server.py`)
-- Stateful user profiles with preferences
-- 6 tools: create_user_profile, get_personalized_recommendation, save_favorite_look, get_user_saved_looks, get_user_statistics, list_all_looks
-
-**fashion-advisor** (`test_mcp/fashion_stdio.py`)
-- Stateless tool suite
-- 3 tools: get_fashion_look, get_all_looks, get_look_by_vibe
+See `test_mcp/README.md` for details.
 
 ## Code Organization
 
-```
-chatllama/
-├── src/
-│   └── chat.py            # Main PyQt6 application
-├── tests/                 # Test files and sample inputs
-│   ├── test_input.txt     # Automation mode sample input
-│   ├── test_mcp_simple.txt
-│   ├── test_cache_save.py
-│   └── test_capabilities_cache.py
-├── test_mcp/              # Test MCP servers
-│   ├── fashion_stdio.py   # Simple stateless MCP
-│   ├── fashion_server/    # Stateful MCP with profiles
-│   └── README.md
-├── docs/
-│   └── ARCHITECTURE.md    # System architecture overview
-├── .github/
-│   └── copilot-instructions.md  # This file
-├── pyproject.toml         # Modern Python project config
-├── .python-version        # Python version (3.11.14)
-├── requirements.txt       # Runtime dependencies
-├── requirements-dev.txt   # Development dependencies
-├── settings.yml           # App configuration
-├── mcp.json              # MCP server definitions
-├── chatllama.log         # Runtime logs
-├── MCP_INTEGRATION.md    # MCP protocol guide
-├── MCP_TOOLS_QUICK_REF.md # Quick reference
-└── README.md
-```
+**Key Files:**
+- `src/chat.py` - Main application (1800+ lines)
+- `pyproject.toml` - Project config with dependencies
+- `settings.yml` - Runtime configuration
+- `docs/ARCHITECTURE.md` - Comprehensive system documentation
+- `tests/` - Test files and automation inputs
+- `test_mcp/` - MCP server implementations
 
 ## Key Implementation Details
 
 ### Panel Widget Architecture
-- Three main UI panels refactored into separate widget classes:
-  - **SettingsPanel** (lines 330-426): Model selection, context/GPU controls
-    - Signals: `model_load_requested`, `model_selection_changed`, `ctx_changed`
-  - **ChatPanel** (lines 428-513): Message history and input
-    - Signals: `send_requested`
-    - Methods: `append_to_history()`, `set_input_text()`
-  - **CardsPanel** (lines 515-530): Placeholder for future card display
-- Property accessors (lines 676-705) maintain backwards compatibility
-- Benefits: Better code organization, testability, maintainability
+- Three main UI panels as separate widget classes:
+  - **SettingsPanel**: Model selection, context/GPU controls (signals: `model_load_requested`, `model_selection_changed`, `ctx_changed`)
+  - **ChatPanel**: Message history and input (signal: `send_requested`, methods: `append_to_history()`, `set_input_text()`)
+  - **CardsPanel**: Placeholder for future expansion
+- Property accessors maintain backwards compatibility with existing code
+- Benefits: Better organization, testability, maintainability
 
 ### Non-blocking Chat
 - `ChatWorker` class extends QObject
@@ -230,7 +198,7 @@ chatllama/
 - Updated every second via QTimer
 - Shows VRAM usage and utilization percentage
 - Token counts (prompt + completion) from llama-cpp-python responses
-- UTF-8 console wrapper for Windows emoji support (lines 37-41)
+- UTF-8 console wrapper for Windows emoji support
 
 ### Model Discovery
 - Recursively scans `D:\LLM Models\{author}\` directories
@@ -261,23 +229,6 @@ chatllama/
 - Check `tool_integration_enabled: true` in settings.yml
 - Verify MCP server is running
 - Check logs: `chatllama.log`
-
-## Next Steps
-
-1. **Implement Tool Execution**
-   - Parse "TOOL: [name] with [params]" in model output
-   - Call MCP tools with parsed parameters
-   - Feed results back to model
-
-2. **Agent Mode UI**
-   - Toggle button to enable agent reasoning
-   - Display tool calls in chat history
-   - Show tool results
-
-3. **Additional MCP Servers**
-   - Web search integration
-   - Code execution
-   - File system access
 
 ## Code Style
 

@@ -1,8 +1,42 @@
 # Test MCP Servers
 
-Two example Model Context Protocol (MCP) servers built with fastmcp for ChatLlama.
+Three example Model Context Protocol (MCP) servers built with fastmcp for ChatLlama.
 
-## 1. Fashion Advisor (Stdio Style) - `fashion_stdio.py`
+## 1. LM Studio Query Server - `lm_studio_server.py` ⭐ NEW
+
+Query LM Studio's API for complex reasoning tasks. Perfect for delegating difficult queries from smaller models to more capable ones.
+
+**Features:**
+- OpenAI-compatible API integration
+- Query LM Studio's loaded model for enhanced reasoning
+- Configurable temperature and max tokens
+- Custom system messages for task-specific prompts
+
+**Tools:**
+- `query_lm_studio(prompt, system_message?, max_tokens?, temperature?)` - Send a query to LM Studio's model
+
+**Requirements:**
+- LM Studio running with a model loaded
+- API server enabled (default: http://localhost:1234)
+
+**Run:**
+```bash
+python lm_studio_server.py
+```
+
+**Usage in ChatLlama:**
+Set in settings.yml:
+```yaml
+mcp_server_enabled: true
+mcp_server_command: python test_mcp/lm_studio_server.py
+tool_integration_enabled: true  # Enable to use tools
+```
+
+This gives your local model the ability to delegate complex tasks to LM Studio's more capable model.
+
+---
+
+## 2. Fashion Advisor (Stdio Style) - `fashion_stdio.py`
 
 A stateless MCP server using stdio transport. Perfect for lightweight, simple integrations.
 
@@ -26,7 +60,7 @@ Add to your MCP config to use stdio transport for simple tool calls.
 
 ---
 
-## 2. Fashion Curator Server (HTTP Server Style) - `fashion_server/server.py`
+## 3. Fashion Curator Server (HTTP Server Style) - `fashion_server/server.py`
 
 A stateful MCP server that runs in its own console. Maintains user profiles and personalized recommendations.
 
