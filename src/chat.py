@@ -351,6 +351,7 @@ class SettingsPanel(QtWidgets.QWidget):
         self.setObjectName("SettingsPanel")
         self.setMinimumWidth(384)
         self.setMaximumWidth(384)
+        self.setAutoFillBackground(True)
         
         self.mode: str = "local"  # "local" or "lm_studio"
         
@@ -363,6 +364,11 @@ class SettingsPanel(QtWidgets.QWidget):
         self.lm_studio_btn: Optional[QtWidgets.QPushButton] = None
         
         self._build_ui()
+        
+        # Initialize Local mode background after UI is built
+        palette = self.palette()
+        palette.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor("#1e1e1e"))
+        self.setPalette(palette)
     
     def _build_ui(self) -> None:
         layout = QtWidgets.QVBoxLayout()
@@ -430,9 +436,6 @@ class SettingsPanel(QtWidgets.QWidget):
 
         layout.addStretch(1)
         self.setLayout(layout)
-        
-        # Initialize with Local mode colors
-        self._set_mode("local")
     
     def _set_mode(self, mode: str) -> None:
         """Set the operation mode and update UI."""
