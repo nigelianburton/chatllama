@@ -339,7 +339,7 @@ class ChatWorker(QtCore.QObject):
             self.error_occurred.emit(str(e))
 
 
-class SettingsPanel(QtWidgets.QWidget):
+class SettingsPanel(QtWidgets.QFrame):
     """Settings panel widget with model selection and configuration."""
     model_load_requested = QtCore.pyqtSignal(str)  # Emits model path
     model_selection_changed = QtCore.pyqtSignal(int)  # Emits index
@@ -353,6 +353,11 @@ class SettingsPanel(QtWidgets.QWidget):
         self.setMaximumWidth(384)
         self.setAutoFillBackground(True)
         
+        # Make the panel visible as a rectangle with a border
+        self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        self.setFrameShadow(QtWidgets.QFrame.Shadow.Raised)
+        self.setLineWidth(1)
+        
         self.mode: str = "local"  # "local" or "lm_studio"
         
         self.model_combo: Optional[QtWidgets.QComboBox] = None
@@ -364,11 +369,6 @@ class SettingsPanel(QtWidgets.QWidget):
         self.lm_studio_btn: Optional[QtWidgets.QPushButton] = None
         
         self._build_ui()
-        
-        # Initialize Local mode background after UI is built
-        palette = self.palette()
-        palette.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor("#1e1e1e"))
-        self.setPalette(palette)
     
     def _build_ui(self) -> None:
         layout = QtWidgets.QVBoxLayout()
@@ -436,30 +436,37 @@ class SettingsPanel(QtWidgets.QWidget):
 
         layout.addStretch(1)
         self.setLayout(layout)
+        
+        # Initialize Local mode colors
+        self._set_mode("local")
     
     def _set_mode(self, mode: str) -> None:
-        """Set the operation mode and update UI."""
+        """Set service mode and update panel background color."""
         self.mode = mode
         
         # Update button states
-        if mode == "local":
-            self.local_btn.setChecked(True)
-            self.lm_studio_btn.setChecked(False)
-            # Local mode: normal background
-            palette = self.palette()
-            palette.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor("#1e1e1e"))
-            self.setPalette(palette)
-            self.setAutoFillBackground(True)
-            logger.info("Service mode: Local (llama-cpp-python)")
-        else:  # lm_studio
-            self.local_btn.setChecked(False)
-            self.lm_studio_btn.setChecked(True)
-            # LM Studio mode: blue tinted background
-            palette = self.palette()
-            palette.setColor(QtGui.QPalette.ColorRole.Window, QtGui.QColor("#2a3f5f"))
-            self.setPalette(palette)
-            self.setAutoFillBackground(True)
+        self.local_btn.setChecked(mode == "local")
+        self.lm_studio_btn.setChecked(mode == "lm_studio")
+        
+        # Change panel background using stylesheet
+        if mode == "lm_studio":
+            self.setStyleSheet("""
+                #SettingsPanel {
+                    background-color: #2a3f5f;
+                    border: 1px solid #1a1a1a;
+                    border-radius: 4px;
+                }
+            """)
             logger.info("Service mode: LM Studio")
+        else:
+            self.setStyleSheet("""
+                #SettingsPanel {
+                    background-color: #fffacd;
+                    border: 1px solid #888888;
+                    border-radius: 4px;
+                }
+            """)
+            logger.info("Service mode: Local (llama-cpp-python)")
         
         self.mode_changed.emit(mode)
     
