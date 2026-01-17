@@ -363,6 +363,7 @@ class SettingsPanel(QtWidgets.QFrame):
         self.model_combo: Optional[QtWidgets.QComboBox] = None
         self.model_load_btn: Optional[QtWidgets.QPushButton] = None
         self.maker_label: Optional[QtWidgets.QLabel] = None
+        self.current_model_label: Optional[QtWidgets.QLabel] = None
         self.status_label: Optional[QtWidgets.QLabel] = None
         self.ctx_spin: Optional[QtWidgets.QSpinBox] = None
         self.local_btn: Optional[QtWidgets.QPushButton] = None
@@ -427,6 +428,12 @@ class SettingsPanel(QtWidgets.QFrame):
         ctx_row_widget = QtWidgets.QWidget()
         ctx_row_widget.setLayout(ctx_row)
         layout.addWidget(ctx_row_widget)
+
+        # Current model label
+        self.current_model_label = QtWidgets.QLabel("Model: None")
+        self.current_model_label.setWordWrap(True)
+        self.current_model_label.setStyleSheet("font-size: 10px; color: #cccccc; font-weight: bold;")
+        layout.addWidget(self.current_model_label)
 
         # Status label
         self.status_label = QtWidgets.QLabel("Ready")
@@ -704,6 +711,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._settings_panel.model_load_requested.connect(self._on_load_model_clicked)
         self._settings_panel.model_selection_changed.connect(self._on_model_selection_changed)
         self._settings_panel.ctx_changed.connect(self._on_ctx_changed)
+        self._settings_panel.mode_changed.connect(self._on_mode_changed)
         
         # Connect signals from chat panel
         self._chat_panel.send_requested.connect(lambda text: self._on_send_message())
@@ -994,8 +1002,13 @@ class ChatWindow(QtWidgets.QMainWindow):
         if not model_path:
             # Fallback to current text if userData not set
             model_path = self._model_combo.currentText()
+        
         if model_path:
-            self._load_model(model_path)
+            # Check the current mode and load accordingly
+            if self._settings_panel and self._settings_panel.mode == "lm_studio":
+                self._load_lm_studio_model(model_path)
+            else:
+                self._load_model(model_path)
 
     def _is_mcp_server_running(self) -> bool:
         """Check if MCP server process is running.
@@ -1448,6 +1461,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             success_msg = f"Model loaded (llama-cpp-python): {model_path.split(chr(92))[-1]} (ctx {desired_ctx})"
             logger.info(success_msg)
             self._set_status(success_msg)
+            self._set_current_model(model_path)  # Update current model display
         except Exception as e:
             error_msg = f"llama-cpp-python failed: {e}"
             logger.warning(error_msg)
@@ -1461,6 +1475,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                 success_msg = f"Model loaded (llama-server): {model_path.split(chr(92))[-1]}"
                 logger.info(success_msg)
                 self._set_status(success_msg)
+                self._set_current_model(model_path)  # Update current model display
             else:
                 error_msg = f"Both llama-cpp-python and llama-server failed to load model"
                 logger.error(error_msg)
@@ -1494,6 +1509,143 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._set_status("Loading default model...")
         QtCore.QTimer.singleShot(500, lambda: self._load_model(model_to_load))
 
+    def _on_mode_changed(self, mode: str) -> None:
+        """Handle mode change - refresh model list from appropriate source."""
+        logger.info(f"Mode changed to: {mode}")
+        if mode == "lm_studio":
+            self._load_lm_studio_models()
+            self._fetch_lm_studio_current_model()
+        else:
+            self._populate_models_with_capabilities()
+            # Update current model display for local mode
+            if self._model_combo and self._model_combo.count() > 0:
+                # Use userData which has the full path (maker/model-name), not just display text
+                current_path = self._model_combo.currentData()
+                if current_path:
+                    self._set_current_model(current_path)
+                else:
+                    # Fallback to display text if no userData
+                    self._set_current_model(self._model_combo.currentText())
+
+    def _load_lm_studio_models(self) -> None:
+        """Fetch available models from LM Studio REST API."""
+        try:
+            lm_studio_port = settings.get("lm_studio_port", 11013)
+            url = f"http://127.0.0.1:{lm_studio_port}/api/v0/models"
+            
+            logger.info(f"Fetching models from LM Studio: {url}")
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            
+            data = response.json()
+            models = data.get("data", [])
+            
+            if not models:
+                logger.warning("No models returned from LM Studio API")
+                self._set_status("No models available from LM Studio")
+                return
+            
+            # Clear and populate combo box
+            if self._model_combo:
+                self._model_combo.clear()
+                for model_info in models:
+                    model_id = model_info.get("id", "unknown")
+                    state = model_info.get("state", "unknown")
+                    # Display model with state indicator
+                    display_text = f"{model_id} ({state})"
+                    self._model_combo.addItem(display_text, userData=model_id)
+                
+                logger.info(f"Loaded {len(models)} models from LM Studio: {[m.get('id') for m in models]}")
+                self._set_status(f"Loaded {len(models)} models from LM Studio ✓")
+                
+                # Select first model
+                if self._model_combo.count() > 0:
+                    self._model_combo.setCurrentIndex(0)
+        
+        except requests.exceptions.ConnectionError:
+            logger.error(f"Could not connect to LM Studio at 127.0.0.1:{lm_studio_port}")
+            self._set_status("Error: Could not connect to LM Studio (is it running?)")
+        except Exception as e:
+            logger.error(f"Error fetching models from LM Studio: {e}")
+            self._set_status(f"Error loading LM Studio models: {e}")
+    
+    def _load_lm_studio_model(self, model_id: str) -> None:
+        """Load a model in LM Studio by selecting it.
+        
+        LM Studio doesn't have an explicit load endpoint. Instead, we:
+        1. Make a test API call to the /api/v0/models/{model} endpoint to verify it exists
+        2. Update the UI to show the selected model
+        3. When the user sends a message, LM Studio will load the model automatically
+        """
+        try:
+            lm_studio_port = settings.get("lm_studio_port", 11013)
+            # Check if the model exists by fetching its info
+            url = f"http://127.0.0.1:{lm_studio_port}/api/v0/models/{model_id}"
+            
+            logger.info(f"Verifying model exists in LM Studio: {url}")
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            
+            model_info = response.json()
+            state = model_info.get("state", "unknown")
+            logger.info(f"Model {model_id} state: {state}")
+            
+            self._set_current_model(model_id)
+            if state == "loaded":
+                self._set_status(f"✓ {model_id} is loaded in LM Studio")
+            else:
+                self._set_status(f"Selected {model_id} (will load when used)")
+        
+        except requests.exceptions.ConnectionError:
+            logger.error(f"Could not connect to LM Studio at 127.0.0.1:{lm_studio_port}")
+            self._set_status("Error: Could not connect to LM Studio (is it running?)")
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"Model {model_id} not found or error: {e}")
+            self._set_status(f"Error: Model {model_id} not found in LM Studio")
+        except Exception as e:
+            logger.error(f"Error selecting model in LM Studio: {e}")
+            self._set_status(f"Error selecting model: {e}")
+    
+    def _fetch_lm_studio_current_model(self) -> None:
+        """Fetch the currently loaded model from LM Studio."""
+        try:
+            lm_studio_port = settings.get("lm_studio_port", 11013)
+            # Use /api/v0/models endpoint to check which model is loaded
+            url = f"http://127.0.0.1:{lm_studio_port}/api/v0/models"
+            
+            logger.info(f"Fetching current model from LM Studio: {url}")
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            
+            data = response.json()
+            models = data.get("data", [])
+            
+            if models:
+                # Find the loaded model
+                loaded_models = [m for m in models if m.get("state") == "loaded"]
+                if loaded_models:
+                    current_model = loaded_models[0].get("id", "unknown")
+                else:
+                    # If no model is loaded, show the first one
+                    current_model = models[0].get("id", "unknown")
+                self._set_current_model(current_model)
+                logger.info(f"Current LM Studio model: {current_model}")
+            else:
+                logger.warning("No models returned from LM Studio")
+                self._set_current_model("LM Studio (no model loaded)")
+        
+        except Exception as e:
+            logger.warning(f"Could not fetch current model from LM Studio: {e}")
+            self._set_current_model("LM Studio (connection error)")
+    
+    def _set_current_model(self, model_name: str) -> None:
+        """Update the display of the currently loaded model."""
+        if self._settings_panel and self._settings_panel.current_model_label:
+            # Truncate long names for display
+            display_name = model_name[-50:] if len(model_name) > 50 else model_name
+            self._settings_panel.current_model_label.setText(f"Model: {display_name}")
+            logger.debug(f"Updated current model display: {model_name}")
+    
     def _set_status(self, message: str) -> None:
         """Update the status label in the settings panel."""
         if self._status_label:
