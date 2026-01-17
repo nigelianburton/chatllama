@@ -344,6 +344,7 @@ class SettingsPanel(QtWidgets.QWidget):
     model_load_requested = QtCore.pyqtSignal(str)  # Emits model path
     model_selection_changed = QtCore.pyqtSignal(int)  # Emits index
     ctx_changed = QtCore.pyqtSignal(int)  # Emits context value
+    mode_changed = QtCore.pyqtSignal(str)  # Emits "local" or "lm_studio"
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -351,11 +352,15 @@ class SettingsPanel(QtWidgets.QWidget):
         self.setMinimumWidth(384)
         self.setMaximumWidth(384)
         
+        self.mode: str = "local"  # "local" or "lm_studio"
+        
         self.model_combo: Optional[QtWidgets.QComboBox] = None
         self.model_load_btn: Optional[QtWidgets.QPushButton] = None
         self.maker_label: Optional[QtWidgets.QLabel] = None
         self.status_label: Optional[QtWidgets.QLabel] = None
         self.ctx_spin: Optional[QtWidgets.QSpinBox] = None
+        self.local_btn: Optional[QtWidgets.QPushButton] = None
+        self.lm_studio_btn: Optional[QtWidgets.QPushButton] = None
         
         self._build_ui()
     
@@ -363,6 +368,24 @@ class SettingsPanel(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout()
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(12)
+
+        # Mode toggle buttons at the top
+        mode_row = QtWidgets.QHBoxLayout()
+        self.local_btn = QtWidgets.QPushButton("Local")
+        self.lm_studio_btn = QtWidgets.QPushButton("LM Studio")
+        
+        # Style the buttons
+        self.local_btn.setCheckable(True)
+        self.lm_studio_btn.setCheckable(True)
+        self.local_btn.setChecked(True)
+        self.lm_studio_btn.setChecked(False)
+        
+        self.local_btn.clicked.connect(lambda: self._set_mode("local"))
+        self.lm_studio_btn.clicked.connect(lambda: self._set_mode("lm_studio"))
+        
+        mode_row.addWidget(self.local_btn)
+        mode_row.addWidget(self.lm_studio_btn)
+        layout.addLayout(mode_row)
 
         layout.addWidget(QtWidgets.QLabel("Settings"))
 
@@ -407,6 +430,24 @@ class SettingsPanel(QtWidgets.QWidget):
 
         layout.addStretch(1)
         self.setLayout(layout)
+    
+    def _set_mode(self, mode: str) -> None:
+        """Set the operation mode and update UI."""
+        self.mode = mode
+        
+        # Update button states
+        if mode == "local":
+            self.local_btn.setChecked(True)
+            self.lm_studio_btn.setChecked(False)
+            # Local mode: normal background
+            self.setStyleSheet("")
+        else:  # lm_studio
+            self.local_btn.setChecked(False)
+            self.lm_studio_btn.setChecked(True)
+            # LM Studio mode: different background color
+            self.setStyleSheet("QWidget#SettingsPanel { background-color: #2a3f5f; border-radius: 4px; }")
+        
+        self.mode_changed.emit(mode)
     
     def _on_load_clicked(self) -> None:
         """Emit signal when load button clicked."""
