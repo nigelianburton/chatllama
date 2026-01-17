@@ -38,7 +38,45 @@ This gives your local model the ability to delegate complex tasks to LM Studio's
 
 ---
 
-## 2. Fashion Advisor (Stdio Style) - `fashion_stdio.py`
+## 2. Fashion Advisor HTTP (for LM Studio) - `fashion_http.py` ✅ WORKING
+
+HTTP/SSE server that LM Studio can use directly as an MCP provider.
+
+**Features:**
+- SSE transport for LM Studio integration
+- Same 3 tools as fashion_stdio.py
+- Runs on port 6820
+
+**Tools:**
+- `get_fashion_look()` - Get a random fashion look
+- `get_all_looks()` - Get all available looks
+- `get_look_by_vibe(vibe)` - Get a look matching a specific vibe
+
+**Setup for LM Studio:**
+
+1. Start the server:
+```bash
+python test_mcp/fashion_http.py
+```
+
+2. Add to `C:\Users\{username}\.lmstudio\mcp-config.json`:
+```json
+{
+  "mcpServers": {
+    "fashion-advisor": {
+      "url": "http://127.0.0.1:6820/sse"
+    }
+  }
+}
+```
+
+3. Restart or reload LM Studio
+
+**Verified working with LM Studio!** Model can call MCP tools and format results.
+
+---
+
+## 3. Fashion Advisor (Stdio Style) - `fashion_stdio.py`
 
 A stateless MCP server using stdio transport. Perfect for lightweight, simple integrations.
 
@@ -62,7 +100,7 @@ Add to your MCP config to use stdio transport for simple tool calls.
 
 ---
 
-## 3. Fashion Curator Server (HTTP Server Style) - `fashion_server/server.py`
+## 4. Fashion Curator Server (HTTP Server Style) - `fashion_server/server.py`
 
 A stateful MCP server that runs in its own console. Maintains user profiles and personalized recommendations.
 
