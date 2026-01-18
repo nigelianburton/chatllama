@@ -98,7 +98,7 @@ logger.debug(f"Added DLL directory: {lm_studio_path}")
 
 from llama_cpp import Llama
 from PyQt6 import QtCore, QtGui, QtWidgets
-from .chatllama_pane_settings import SettingsPanel
+from chatllama_pane_settings import SettingsPanel
 
 
 class ModelCapabilities:
