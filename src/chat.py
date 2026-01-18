@@ -96,6 +96,22 @@ logger.debug(f"LLAMA_CPP_LIB set to: {os.environ['LLAMA_CPP_LIB']}")
 os.add_dll_directory(lm_studio_path)
 logger.debug(f"Added DLL directory: {lm_studio_path}")
 
+# 3. Set Qt plugin path for PyQt6 (must be before importing PyQt6)
+# This is needed when running directly without conda activation
+if "QT_PLUGIN_PATH" not in os.environ:
+    conda_prefix = os.environ.get("CONDA_PREFIX")
+    if not conda_prefix:
+        # Try to detect conda env from sys.prefix
+        conda_prefix = sys.prefix
+    qt_plugin_path = os.path.join(conda_prefix, "Library", "lib", "qt6", "plugins")
+    if os.path.exists(qt_plugin_path):
+        os.environ["QT_PLUGIN_PATH"] = qt_plugin_path
+        logger.debug(f"Set QT_PLUGIN_PATH to: {qt_plugin_path}")
+    else:
+        logger.warning(f"Qt plugins directory not found at: {qt_plugin_path}")
+else:
+    logger.debug(f"QT_PLUGIN_PATH already set to: {os.environ['QT_PLUGIN_PATH']}")
+
 from llama_cpp import Llama
 from PyQt6 import QtCore, QtGui, QtWidgets
 from chatllama_pane_settings import SettingsPanel

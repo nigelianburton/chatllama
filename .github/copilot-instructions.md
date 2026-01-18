@@ -30,8 +30,8 @@ ChatLlama is a PyQt6-based chat interface for local LLMs with agent/MCP support.
 - **src/chatllama_subpanel_llmsettings.py**: Shared settings UI for model selection, context, load button
 - **src/chatllama_cpp.py**: Handler for local llama-cpp-python backend
 - **src/chatllama_lmstudio.py**: Handler for LM Studio remote backend
-- **src/_card_template.py**: Card template base class with 4:3 aspect ratio (MCP-like interface)
-- **src/card_*.py**: Card implementations (e.g., card_chrome.py for embedded browser)
+- **src/cards/_card_template.py**: Card template base class with 4:3 aspect ratio (MCP-like interface)
+- **src/cards/card_*.py**: Card implementations (e.g., card_chrome.py for embedded browser)
 - **Models**: GGUF models stored in `D:\LLM Models\{author}\{model-name}-GGUF`
 - **Backend**: llama-cpp-python for inference, configured to use LM Studio's llama.cpp v1.103.2
 - **MCP Servers**: Test servers in `test_mcp/` for tool discovery and execution
@@ -92,7 +92,7 @@ Adaptive message display with three layout modes:
 
 ### Card System
 
-**MCP-Like Cards** (`src/_card_template.py` + `src/card_*.py`):
+**MCP-Like Cards** (`src/cards/_card_template.py` + `src/cards/card_*.py`):
 - **Template**: `CardBase` maintains 4:3 aspect ratio via `AspectRatioFrame` (height adapts to width)
 - **Discovery**: All modules matching `card_*.py` are loaded as card implementations (filters out `_card_template`)
 - **Interface**: Each card exports:

@@ -1,5 +1,8 @@
 from typing import Any, Dict, List, Optional
 from PyQt6 import QtWidgets, QtCore
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class AspectRatioFrame(QtWidgets.QFrame):
@@ -10,16 +13,23 @@ class AspectRatioFrame(QtWidgets.QFrame):
         policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
         policy.setHeightForWidth(True)
         self.setSizePolicy(policy)
-        self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
-        self.setFrameShadow(QtWidgets.QFrame.Shadow.Sunken)
-        self.setLineWidth(1)
+        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.setLineWidth(0)
+        # Make background transparent so browser shows through
+        self.setStyleSheet("AspectRatioFrame { background-color: transparent; border: 2px solid #d0e7f9; }")
 
     def hasHeightForWidth(self) -> bool:
         return True
 
     def heightForWidth(self, width: int) -> int:
         # For 4:3 ratio: height = width * (3 / 4)
-        return int(width * 3 / 4)
+        height = int(width * 3 / 4)
+        logger.debug(f"[AspectRatioFrame] heightForWidth({width}) = {height}")
+        return height
+    
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        logger.info(f"[AspectRatioFrame] resizeEvent: new size = {event.size()}, old size = {event.oldSize()}")
 
 
 class CardBase(QtWidgets.QFrame):
@@ -42,6 +52,12 @@ class CardBase(QtWidgets.QFrame):
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None) -> None:
         super().__init__(parent)
         self._current_card: Optional[QtWidgets.QWidget] = None
+        
+        # Set minimum size to ensure card is visible
+        self.setMinimumHeight(300)
+        # Remove frame styling to let content show through
+        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.setLineWidth(0)
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -60,12 +76,27 @@ class CardBase(QtWidgets.QFrame):
 
     def set_card_widget(self, widget: QtWidgets.QWidget) -> None:
         """Attach a concrete card widget into the aspect-ratio container."""
+        logger.info(f"[CardBase] set_card_widget called with: {widget.__class__.__name__}")
         if self._current_card:
+            logger.info(f"[CardBase] Removing existing card: {self._current_card.__class__.__name__}")
             self._current_card.setParent(None)
             self._aspect_layout.removeWidget(self._current_card)
         self._current_card = widget
         self._aspect_layout.addWidget(widget)
+        # Force widget to be visible and update geometry
+        widget.show()
+        self._aspect_frame.updateGeometry()
+        self.updateGeometry()
+        logger.info(f"[CardBase] Widget added to layout. Widget size: {widget.size()}, visible: {widget.isVisible()}")
+        logger.info(f"[CardBase] AspectFrame size: {self._aspect_frame.size()}, children: {len(self._aspect_frame.children())}")
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        logger.info(f"[CardBase] showEvent: size = {self.size()}, visible = {self.isVisible()}")
+        logger.info(f"[CardBase] AspectFrame size = {self._aspect_frame.size()}, visible = {self._aspect_frame.isVisible()}")
+        if self._current_card:
+            logger.info(f"[CardBase] Current card ({self._current_card.__class__.__name__}) size = {self._current_card.size()}, visible = {self._current_card.isVisible()}")
+    
     def call(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> Any:
         """Placeholder for MCP-like call dispatch; override in subclasses."""
         raise NotImplementedError("Card does not implement call dispatch")
