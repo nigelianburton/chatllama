@@ -1,0 +1,6 @@
+# Multi-turn conversation test: greetings, weather, fashion, then random
+hi there
+what is the weather like today?
+what are some fashion looks i can try?
+tell me a joke
+EXIT

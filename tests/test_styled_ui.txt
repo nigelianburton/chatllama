@@ -1,0 +1,6 @@
+# Test styled message boxes
+# This file tests that user, assistant, and tool messages appear in colored boxes
+
+hello there
+how are you?
+#EXIT

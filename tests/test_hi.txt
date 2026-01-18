@@ -1,0 +1,3 @@
+# Test basic conversation without tool spam
+hi
+EXIT

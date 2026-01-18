@@ -500,7 +500,7 @@ class ChatPanel(QtWidgets.QWidget):
         super().__init__(parent)
         self.setObjectName("ChatPanel")
         
-        self.history_widget: Optional[QtWidgets.QPlainTextEdit] = None
+        self.history_widget: Optional[QtWidgets.QTextEdit] = None
         self.prompt_input: Optional[PromptInput] = None
         self.send_btn: Optional[QtWidgets.QPushButton] = None
         
@@ -514,9 +514,19 @@ class ChatPanel(QtWidgets.QWidget):
         chat_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
         chat_splitter.setHandleWidth(2)
 
-        self.history_widget = QtWidgets.QPlainTextEdit()
+        # Use QTextEdit instead of QPlainTextEdit to support HTML/rich text
+        self.history_widget = QtWidgets.QTextEdit()
         self.history_widget.setReadOnly(True)
         self.history_widget.setPlaceholderText("Chat history will appear here...")
+        # Set stylesheet for better appearance
+        self.history_widget.setStyleSheet("""
+            QTextEdit {
+                background-color: #f5f5f5;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                padding: 8px;
+            }
+        """)
 
         self.prompt_input = PromptInput()
         self.prompt_input.setPlaceholderText("Type your message here... (Enter to send, Ctrl+Enter for newline)")
@@ -551,15 +561,80 @@ class ChatPanel(QtWidgets.QWidget):
             if text:
                 self.send_requested.emit(text)
     
-    def append_to_history(self, text: str, append_only: bool = False) -> None:
-        """Append text to history widget."""
+    def append_to_history(self, text: str, append_only: bool = False, message_type: str = "system") -> None:
+        """Append text to history widget with optional styling.
+        
+        Args:
+            text: The text to append
+            append_only: If True, append without adding newlines. If False, add as new message block
+            message_type: Type of message - "user", "assistant", "system", "tool", "error"
+        """
         if not self.history_widget:
             return
+        
+        # Map message types to colors and styles
+        styles = {
+            "user": {
+                "bg_color": "#e3f2fd",  # Light blue
+                "border_color": "#2196f3",  # Blue
+                "text_color": "#0d47a1",  # Dark blue
+                "label": "You"
+            },
+            "assistant": {
+                "bg_color": "#f3e5f5",  # Light purple
+                "border_color": "#9c27b0",  # Purple
+                "text_color": "#4a148c",  # Dark purple
+                "label": "Assistant"
+            },
+            "system": {
+                "bg_color": "#fff3e0",  # Light orange
+                "border_color": "#ff9800",  # Orange
+                "text_color": "#e65100",  # Dark orange
+                "label": "System"
+            },
+            "tool": {
+                "bg_color": "#e8f5e9",  # Light green
+                "border_color": "#4caf50",  # Green
+                "text_color": "#1b5e20",  # Dark green
+                "label": "Tool"
+            },
+            "error": {
+                "bg_color": "#ffebee",  # Light red
+                "border_color": "#f44336",  # Red
+                "text_color": "#b71c1c",  # Dark red
+                "label": "Error"
+            }
+        }
+        
+        style = styles.get(message_type, styles["system"])
+        
         if append_only:
-            self.history_widget.moveCursor(QtGui.QTextCursor.MoveOperation.End)
+            # For streaming chunks, just append plain text
+            cursor = self.history_widget.textCursor()
+            cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+            self.history_widget.setTextCursor(cursor)
             self.history_widget.insertPlainText(text)
         else:
-            self.history_widget.appendPlainText(text)
+            # For complete messages, wrap in styled box
+            cursor = self.history_widget.textCursor()
+            cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+            self.history_widget.setTextCursor(cursor)
+            
+            # Create HTML styled message box
+            html = f"""
+            <div style="margin: 8px 0; padding: 12px; background-color: {style['bg_color']}; 
+                        border-left: 4px solid {style['border_color']}; border-radius: 4px;">
+                <div style="font-weight: bold; color: {style['border_color']}; margin-bottom: 4px;">
+                    {style['label']}
+                </div>
+                <div style="color: {style['text_color']}; white-space: pre-wrap; word-wrap: break-word;">
+                    {text.replace('<', '&lt;').replace('>', '&gt;')}
+                </div>
+            </div>
+            """
+            self.history_widget.insertHtml(html)
+        
+        # Scroll to bottom
         self.history_widget.moveCursor(QtGui.QTextCursor.MoveOperation.End)
     
     def clear_input(self) -> None:
@@ -568,7 +643,7 @@ class ChatPanel(QtWidgets.QWidget):
             self.prompt_input.clear()
     
     def get_history_text(self) -> str:
-        """Get all text from history widget."""
+        """Get all text from history widget (plain text)."""
         if self.history_widget:
             return self.history_widget.toPlainText()
         return ""
@@ -1155,14 +1230,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         Returns:
             Formatted string describing available tools
         """
-        if not tools:
-            return ""
-        
-        tools_text = "\n".join([
-            f"  • {tool.name}: {tool.description}"
-            for tool in tools
-        ])
-        return tools_text
+        # Return empty string - tools should not be listed in system prompt
+        # The model should only use tools when contextually appropriate
+        # Tool names are handled implicitly during tool execution
+        return ""
 
     def _fetch_and_integrate_tools(self) -> None:
         """Fetch MCP tools and integrate them into the system prompt.
@@ -1182,8 +1253,8 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._messages[0]["content"] = "You are a helpful assistant."
             return
         
-        tools_list = self._format_tools_for_prompt(tools)
-        tool_prompt = TOOL_PREAMBLE.format(tools_list=tools_list)
+        # No need to format tools list - just use the preamble directly
+        tool_prompt = TOOL_PREAMBLE
         
         # Update system message to include tool information
         self._messages[0]["content"] = f"You are a helpful assistant.\n\n{tool_prompt}"
@@ -1299,7 +1370,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         """Execute requested tool and continue the conversation with its output."""
         tool_name, args = tool_request
         logger.info(f"Detected tool request: {tool_name} with args {args}")
-        self._append_to_history(f"\n[Tool requested] {tool_name} {args}\n")
+        self._append_to_history(f"Tool requested: {tool_name} {args}", message_type="tool")
 
         # Keep automation blocked while executing tool
         self.processing_message = True
@@ -1307,9 +1378,12 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._send_btn.setEnabled(False)
             self._send_btn.setText("Running tool...")
 
+        logger.info(f"[TOOL] Starting execution of {tool_name}")
         tool_output = self._execute_tool_call(tool_name, args)
+        logger.info(f"[TOOL] Execution complete for {tool_name}, output length: {len(tool_output) if tool_output else 0}")
+        
         if not tool_output:
-            self._append_to_history(f"[Tool failed] {tool_name}\n")
+            self._append_to_history(f"Tool failed: {tool_name}", message_type="error")
             logger.error(f"Tool execution failed or returned empty result: {tool_name}")
             self.processing_message = False
             if self._send_btn:
@@ -1320,19 +1394,14 @@ class ChatWindow(QtWidgets.QMainWindow):
             return
 
         tool_message = f"Tool {tool_name} result:\n{tool_output}"
-        # Append readable output to history
-        self._append_to_history(tool_message + "\n")
+        # Append readable output to history with tool styling
+        self._append_to_history(tool_message, message_type="tool")
         # Provide tool result to model as assistant content (avoids extra system messages)
         self._messages.append({"role": "assistant", "content": tool_message})
+        logger.info(f"[TOOL] Added tool result to message history for {tool_name}")
 
-        # Prune message history to keep context under control (keep last 8 entries + system)
-        try:
-            base_system = self._messages[0]
-            tail = self._messages[-8:]
-            self._messages = [base_system] + tail
-        except Exception:
-            pass
-
+        # Do NOT prune here - let _start_chat_completion handle pruning before next completion
+        # This ensures tool results stay in context for the next turn
         # Do not immediately start another completion; avoid decoder issues
         # Re-enable send and continue automation if applicable
         self.processing_message = False
@@ -1725,7 +1794,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         logger.info(f"User message: {user_input}")
 
         # Add user message to history and messages
-        self._append_to_history(f"You: {user_input}\n")
+        self._append_to_history(user_input, message_type="user")
         self._messages.append({"role": "user", "content": user_input})
         self._prompt_input.clear()
 
@@ -1757,6 +1826,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._chat_worker = ChatWorker(self._model, self._messages)
         self._chat_thread = QtCore.QThread()
         self._chat_worker.moveToThread(self._chat_thread)
+        self._streaming_response = ""  # Buffer for collecting response chunks
 
         # Connect signals
         self._chat_worker.chunk_ready.connect(self._on_chunk_ready)
@@ -1770,7 +1840,14 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def _on_chunk_ready(self, chunk: str) -> None:
         """Handle incoming chunk from the model."""
-        self._append_to_history(chunk, append_only=True)
+        # Collect chunks into a buffer
+        self._streaming_response += chunk
+        # Show live streaming to user as plain text (no styling for streaming chunks)
+        if self._chat_panel and self._chat_panel.history_widget:
+            cursor = self._chat_panel.history_widget.textCursor()
+            cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+            self._chat_panel.history_widget.setTextCursor(cursor)
+            self._chat_panel.history_widget.insertPlainText(chunk)
     
     def _on_usage_ready(self, usage: dict) -> None:
         """Handle token usage stats from the model."""
@@ -1789,22 +1866,35 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def _on_chat_finished(self) -> None:
         """Handle chat completion."""
-        self._append_to_history("\n\n")
-
-        # Extract full response and add to messages
-        current_text = self._history_widget.toPlainText() if self._history_widget else ""
-        # Find the last assistant response by looking backward from end
-        lines = current_text.split("\n")
-        response_lines = []
-        for line in reversed(lines):
-            if line.startswith("You:"):
-                break
-            response_lines.insert(0, line)
-        response = "\n".join(response_lines).strip()
-
+        # The response has been streamed and displayed as plain text already
+        # Now we need to replace that plain text with a styled box version
+        response = self._streaming_response.strip()
+        self._streaming_response = ""  # Clear buffer
+        
         if response:
             self._messages.append({"role": "assistant", "content": response})
             logger.info(f"Assistant response: {response}")
+            
+            # Replace the streamed plain text with a styled box
+            if self._chat_panel and self._chat_panel.history_widget:
+                # Remove the plain text that was streamed
+                cursor = self._chat_panel.history_widget.textCursor()
+                cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+                
+                # Select and delete the plain text response
+                # We need to find and delete the last response content
+                text = self._chat_panel.history_widget.toPlainText()
+                if text.endswith(response):
+                    # Move cursor to end, then select backwards by response length
+                    cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+                    cursor.movePosition(QtGui.QTextCursor.MoveOperation.PreviousCharacter,
+                                       QtGui.QTextCursor.MoveMode.KeepAnchor,
+                                       len(response))
+                    cursor.removeSelectedText()
+                    self._chat_panel.history_widget.setTextCursor(cursor)
+                
+                # Now add the styled box version
+                self._append_to_history(response, message_type="assistant")
 
         tool_request = self._parse_tool_request(response) if response else None
 
@@ -1850,10 +1940,16 @@ class ChatWindow(QtWidgets.QMainWindow):
             logger.error(f"Exiting automation mode due to error: {error}")
             QtCore.QTimer.singleShot(1000, self.close)
 
-    def _append_to_history(self, text: str, append_only: bool = False) -> None:
-        """Append text to the history widget."""
+    def _append_to_history(self, text: str, append_only: bool = False, message_type: str = "system") -> None:
+        """Append text to the history widget.
+        
+        Args:
+            text: Text to append
+            append_only: If True, append without styling (for streaming)
+            message_type: Type of message - user, assistant, system, tool, error
+        """
         if self._chat_panel:
-            self._chat_panel.append_to_history(text, append_only)
+            self._chat_panel.append_to_history(text, append_only, message_type)
 
     def _load_input_file(self, file_path: str) -> list[dict]:
         """Load messages from a file. Each line is a message, special marker 'EXIT' triggers shutdown."""
@@ -1884,7 +1980,11 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def _process_next_automation_message(self) -> None:
         """Process the next message in automation mode."""
+        logger.debug(f"[AUTOMATION] Processing next - mode:{self.automation_mode}, processing:{self.processing_message}, pending:{len(self.pending_messages) if self.pending_messages else 0}")
+        
         if not self.automation_mode or self.processing_message or not self.pending_messages:
+            if self.processing_message:
+                logger.debug("[AUTOMATION] Blocked - still processing a message")
             return
         
         if not self._model:
