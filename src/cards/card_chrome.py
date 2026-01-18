@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Optional
 from PyQt6 import QtCore, QtWidgets
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from _card_template import CardBase
+from ._card_template import CardBase
 
 
 class CardChrome(CardBase):
