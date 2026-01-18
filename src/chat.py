@@ -590,7 +590,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         splitter.setHandleWidth(2)
 
         # Create panel widgets
-        self._settings_panel = SettingsPanel(default_ctx=DEFAULT_CTX)
+        self._settings_panel = SettingsPanel(default_ctx=DEFAULT_CTX, settings=settings)
         self._chat_panel = ChatPanel()
         self._cards_panel = CardsPanel()
         self._trace_panel = TracePanel()
@@ -646,6 +646,10 @@ class ChatWindow(QtWidgets.QMainWindow):
                 toolbar.setStyleSheet("background-color: #33373d;")
 
             hbox.addWidget(title_label)
+            # Place LMS toggle in the same row as the Settings title
+            if title_lower == "settings" and getattr(self, "_settings_panel", None) and getattr(self._settings_panel, "lms_toggle", None):
+                hbox.addSpacing(8)
+                hbox.addWidget(self._settings_panel.lms_toggle)
             hbox.addStretch(1)
             toolbar.setLayout(hbox)
 
@@ -673,6 +677,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         
         # Connect signals from chat panel
         self._chat_panel.send_requested.connect(lambda text: self._on_send_message())
+
+        # Connect MCP test harness: trigger tool request + execution for all MCP panels
+        if hasattr(self._settings_panel, "mcp_panels") and self._settings_panel.mcp_panels:
+            for panel in self._settings_panel.mcp_panels:
+                panel.tool_call_requested.connect(self._on_mcp_tool_call_requested)
         
         # Populate models in settings panel
         if self._cpp_handler:
@@ -691,6 +700,98 @@ class ChatWindow(QtWidgets.QMainWindow):
         splitter.setStretchFactor(3, 1)
 
         return splitter
+
+    def _on_mcp_tool_call_requested(self, tool_name: str, arguments: dict, server: dict) -> None:
+        """Create tool request bubble and execute call via selected MCP server.
+
+        Shows a TOOL REQUEST bubble, executes the tool, and appends a
+        TOOL RESPONSE bubble with the formatted result.
+        """
+        try:
+            # Add tool request bubble
+            if self._chat_panel:
+                self._chat_panel._create_message_bubble(
+                    text="",
+                    message_type="tool_request",
+                    tool_request={"name": tool_name, "arguments": arguments},
+                )
+
+            # Execute tool via selected server
+            result_text = self._execute_tool_on_server(server, tool_name, arguments)
+            if not result_text:
+                result_text = f"[TOOL_RESULT]\nError: Tool execution failed for {tool_name}\n[END_TOOL_RESULT]"
+
+            # Add tool response bubble
+            if self._chat_panel:
+                self._chat_panel._create_message_bubble(
+                    text="",
+                    message_type="tool_response",
+                    tool_response={"name": tool_name, "result": result_text},
+                )
+        except Exception as e:
+            logger.error(f"MCP panel tool call handler error: {e}")
+
+    def _execute_tool_on_server(self, server: dict, tool_name: str, arguments: dict) -> Optional[str]:
+        """Execute a tool using either stdio MCP or HTTP MCP server entry.
+
+        Returns formatted result text (wrapped in [TOOL_RESULT] tags) or None.
+        """
+        try:
+            # HTTP transport (no fallbacks)
+            if server and "url" in server:
+                import requests
+                base = str(server.get("url")).rstrip("/")
+                # Try POST /call_tool then /tools/call
+                for endpoint in ("/call_tool", "/tools/call"):
+                    try:
+                        resp = requests.post(
+                            base + endpoint,
+                            json={"name": tool_name, "arguments": arguments or {}},
+                            timeout=10,
+                        )
+                        if resp.ok:
+                            data = resp.json()
+                            # Format generically
+                            payload = json.dumps(data, indent=2)
+                            return f"[TOOL_RESULT]\n{payload}\n[END_TOOL_RESULT]"
+                    except Exception:
+                        continue
+                return None
+
+            # stdio transport via mcp.client (no fallbacks)
+            command = server.get("command") if server else None
+            args = server.get("args") if server else None
+            if not command:
+                return None
+
+            import asyncio
+            from mcp.client.session import ClientSession
+            from mcp.client.stdio import stdio_client, StdioServerParameters
+
+            async def run_call():
+                params = StdioServerParameters(
+                    command=command,
+                    args=args if isinstance(args, list) else [args] if isinstance(args, str) else [],
+                    cwd=PROJECT_ROOT,
+                )
+                async with stdio_client(params) as (read_stream, write_stream):
+                    async with ClientSession(read_stream, write_stream) as session:
+                        await session.initialize()
+                        result = await session.call_tool(tool_name, arguments or {})
+                        return result
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(run_call())
+            loop.close()
+
+            if not result:
+                return None
+            # Use existing formatter
+            return self._format_tool_result(result, wrap_in_tags=True)
+        except Exception as e:
+            logger.error(f"Tool execution error on selected server: {e}")
+            return None
 
     def _toggle_settings(self) -> None:
         self._toggle_panel(0, self._settings_panel, self._settings_toggle_btn, "_settings_collapsed")
@@ -991,14 +1092,14 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _on_load_model_clicked(self, model_path: Optional[str] = None) -> None:
         """Load the selected local model."""
         if not model_path and self._model_combo:
-            model_path = self._model_combo.currentData() or self._model_combo.currentText()
+            model_path = self._model_combo.currentData() or self._model_combo.currentText() or None
         if model_path:
             self._load_model(model_path)
 
     def _on_load_lmstudio_clicked(self, model_id: Optional[str] = None) -> None:
         """Load the selected LM Studio model."""
         combo = self._settings_panel.lmstudio_panel.model_combo if self._settings_panel else None
-        if not model_id and combo:
+        if not model_id and combo and combo.count() > 0:
             model_id = combo.currentData() or combo.currentText()
         if model_id:
             self._load_lm_studio_model(model_id)
@@ -1006,14 +1107,14 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _on_lmstudio_selection_changed(self, index: int) -> None:
         # Update status to reflect selected LM Studio model
         combo = self._settings_panel.lmstudio_panel.model_combo if self._settings_panel else None
-        status_label = self._settings_panel.lmstudio_panel.status_label if self._settings_panel else None
+        status_label = getattr(self._settings_panel.lmstudio_panel, "status_label", None) if self._settings_panel else None
         if combo and status_label:
             current = combo.itemData(index) or combo.itemText(index)
             status_label.setText(f"Selected: {current}")
 
     def _on_lmstudio_ctx_changed(self, value: int) -> None:
         # LM Studio context change acknowledgement
-        status_label = self._settings_panel.lmstudio_panel.status_label if self._settings_panel else None
+        status_label = getattr(self._settings_panel.lmstudio_panel, "status_label", None) if self._settings_panel else None
         if status_label:
             status_label.setText(f"Context set to {value}")
 
@@ -1080,8 +1181,6 @@ class ChatWindow(QtWidgets.QMainWindow):
             return
 
         logger.info("MCP stdio mode: server will be spawned on demand")
-        if self._status_label:
-            self._status_label.setText("MCP server: Pending")
 
         # Trigger tool fetch; stdio_client will spawn the server if needed
         self._fetch_and_integrate_tools()
@@ -1257,7 +1356,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         # Update system message to include tool information
         self._messages[0]["content"] = f"You are a helpful assistant.\n\n{tool_prompt}"
         logger.info(f"Integrated {len(tools)} MCP tools into system prompt")
-        self._status_label.setText("MCP server: Connected")
+        # Status label removed; no-op on connect
 
     def _parse_tool_request(self, text: str) -> Optional[tuple[str, dict]]:
         """Detect and parse LM Studio format tool calls from model output.
@@ -1727,14 +1826,14 @@ class ChatWindow(QtWidgets.QMainWindow):
             
             if not models:
                 logger.warning("No models returned from LM Studio API")
-                lm_status = self._settings_panel.lmstudio_panel.status_label if self._settings_panel else None
+                lm_status = getattr(self._settings_panel.lmstudio_panel, "status_label", None) if self._settings_panel else None
                 if lm_status:
                     lm_status.setText("No models available from LM Studio")
                 return
             
             # Clear and populate combo box
             lm_combo = self._settings_panel.lmstudio_panel.model_combo if self._settings_panel else None
-            lm_status = self._settings_panel.lmstudio_panel.status_label if self._settings_panel else None
+            lm_status = getattr(self._settings_panel.lmstudio_panel, "status_label", None) if self._settings_panel else None
             if lm_combo:
                 lm_combo.clear()
                 for model_info in models:
@@ -1754,11 +1853,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         
         except requests.exceptions.ConnectionError:
             logger.error(f"Could not connect to LM Studio at 127.0.0.1:{lm_studio_port}")
-            if self._settings_panel and self._settings_panel.lmstudio_panel.status_label:
+            if self._settings_panel and getattr(self._settings_panel.lmstudio_panel, "status_label", None):
                 self._settings_panel.lmstudio_panel.status_label.setText("Error: Could not connect to LM Studio (is it running?)")
         except Exception as e:
             logger.error(f"Error fetching models from LM Studio: {e}")
-            if self._settings_panel and self._settings_panel.lmstudio_panel.status_label:
+            if self._settings_panel and getattr(self._settings_panel.lmstudio_panel, "status_label", None):
                 self._settings_panel.lmstudio_panel.status_label.setText(f"Error loading LM Studio models: {e}")
     
     def _load_lm_studio_model(self, model_id: str) -> None:
@@ -1783,7 +1882,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             logger.info(f"Model {model_id} state: {state}")
             
             self._set_current_model(model_id)
-            lm_status = self._settings_panel.lmstudio_panel.status_label if self._settings_panel else None
+            lm_status = getattr(self._settings_panel.lmstudio_panel, "status_label", None) if self._settings_panel else None
             if lm_status:
                 if state == "loaded":
                     lm_status.setText(f"✓ {model_id} is loaded in LM Studio")
@@ -1792,15 +1891,15 @@ class ChatWindow(QtWidgets.QMainWindow):
         
         except requests.exceptions.ConnectionError:
             logger.error(f"Could not connect to LM Studio at 127.0.0.1:{lm_studio_port}")
-            if self._settings_panel and self._settings_panel.lmstudio_panel.status_label:
+            if self._settings_panel and getattr(self._settings_panel.lmstudio_panel, "status_label", None):
                 self._settings_panel.lmstudio_panel.status_label.setText("Error: Could not connect to LM Studio (is it running?)")
         except requests.exceptions.HTTPError as e:
             logger.error(f"Model {model_id} not found or error: {e}")
-            if self._settings_panel and self._settings_panel.lmstudio_panel.status_label:
+            if self._settings_panel and getattr(self._settings_panel.lmstudio_panel, "status_label", None):
                 self._settings_panel.lmstudio_panel.status_label.setText(f"Error: Model {model_id} not found in LM Studio")
         except Exception as e:
             logger.error(f"Error selecting model in LM Studio: {e}")
-            if self._settings_panel and self._settings_panel.lmstudio_panel.status_label:
+            if self._settings_panel and getattr(self._settings_panel.lmstudio_panel, "status_label", None):
                 self._settings_panel.lmstudio_panel.status_label.setText(f"Error selecting model: {e}")
     
     def _fetch_lm_studio_current_model(self) -> None:
@@ -1837,18 +1936,18 @@ class ChatWindow(QtWidgets.QMainWindow):
     
     def _set_current_model(self, model_name: str) -> None:
         """Update the display of the currently loaded model."""
-        label = None
         if self._settings_panel and self._settings_panel.cpp_panel:
-            label = self._settings_panel.cpp_panel.current_model_label
-        if label:
-            display_name = model_name[-50:] if len(model_name) > 50 else model_name
-            label.setText(f"Model: {display_name}")
-            logger.debug(f"Updated current model display: {model_name}")
+            try:
+                # Delegate to subpanel API to render combined header text
+                self._settings_panel.cpp_panel.set_current_model(model_name)
+                logger.debug(f"Updated current model display: {model_name}")
+            except Exception:
+                pass
     
     def _set_status(self, message: str) -> None:
         """Update the status label in the settings panel."""
-        if self._status_label:
-            self._status_label.setText(message)
+        # Status row removed per spec; no-op
+        return
 
     def _on_model_selection_changed(self, index: int) -> None:
         """Update context spin to override or default when model selection changes."""
@@ -1857,14 +1956,6 @@ class ChatWindow(QtWidgets.QMainWindow):
         model_path = self._model_combo.itemData(index) or self._model_combo.itemText(index)
         ctx = int(MODEL_CTX_OVERRIDES.get(model_path, DEFAULT_CTX))
         self._ctx_spin.setValue(ctx)
-        
-        # Show maker label if model has a parent folder
-        if self._maker_label and '/' in model_path:
-            maker = model_path.split('/', 1)[0]
-            self._maker_label.setText(f"by {maker}")
-            self._maker_label.setVisible(True)
-        elif self._maker_label:
-            self._maker_label.setVisible(False)
         
         self._set_status(f"Model selected. Context: {ctx} tokens")
 

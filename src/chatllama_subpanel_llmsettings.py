@@ -5,8 +5,30 @@ from PyQt6 import QtCore, QtWidgets
 logger = logging.getLogger(__name__)
 
 
+class _SpinAdapter:
+    """Adapter to mimic QSpinBox API over a QLineEdit for compatibility."""
+    def __init__(self, edit: QtWidgets.QLineEdit, default: int = 16384) -> None:
+        self._edit = edit
+        self._default = default
+
+    def value(self) -> int:
+        try:
+            return int(self._edit.text().strip())
+        except Exception:
+            return self._default
+
+    def setValue(self, v: int) -> None:
+        self._edit.setText(str(v))
+
+
 class LlmSettingsPanel(QtWidgets.QFrame):
-    """Reusable LLM settings panel (model + context + status)."""
+    """Reusable LLM settings panel with minimal rows.
+
+    Rows:
+    1) Header: "<Local/LM Studio>: <model name or None>"
+    2) Model dropdown with Load button
+    3) Context (text box, default 16384) and Temp (default 0.7)
+    """
 
     model_load_requested = QtCore.pyqtSignal(str)
     model_selection_changed = QtCore.pyqtSignal(int)
@@ -26,10 +48,9 @@ class LlmSettingsPanel(QtWidgets.QFrame):
 
         self.model_combo: Optional[QtWidgets.QComboBox] = None
         self.model_load_btn: Optional[QtWidgets.QPushButton] = None
-        self.maker_label: Optional[QtWidgets.QLabel] = None
-        self.current_model_label: Optional[QtWidgets.QLabel] = None
-        self.status_label: Optional[QtWidgets.QLabel] = None
-        self.ctx_spin: Optional[QtWidgets.QSpinBox] = None
+        self.model_status_label: Optional[QtWidgets.QLabel] = None
+        self.ctx_edit: Optional[QtWidgets.QLineEdit] = None
+        self.temp_edit: Optional[QtWidgets.QLineEdit] = None
 
         self._build_ui()
 
@@ -38,24 +59,28 @@ class LlmSettingsPanel(QtWidgets.QFrame):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
-        # Title label (simple text for now)
-        title_label = QtWidgets.QLabel(self.title)
-        title_label.setStyleSheet("font-size: 12px; font-weight: 700; color: #f5f5f5;")
-        layout.addWidget(title_label)
+        # Header: title + current model combined
+        self.model_status_label = QtWidgets.QLabel()
+        self.model_status_label.setWordWrap(True)
+        layout.addWidget(self.model_status_label)
+        # initialize with None in red
+        self._update_model_status(None)
 
-        model_label = QtWidgets.QLabel("Model:")
-        model_label.setStyleSheet("color: #f5f5f5;")
         self.model_combo = QtWidgets.QComboBox()
         self.model_combo.setStyleSheet("color: #f5f5f5;")
         self.model_combo.currentIndexChanged.connect(self.model_selection_changed.emit)
 
-        self.model_load_btn = QtWidgets.QPushButton("Load Model")
+        self.model_load_btn = QtWidgets.QPushButton("Load")
         self.model_load_btn.setStyleSheet("color: #f5f5f5;")
         self.model_load_btn.clicked.connect(self._on_load_clicked)
-
-        layout.addWidget(model_label)
-        layout.addWidget(self.model_combo)
-        layout.addWidget(self.model_load_btn)
+        model_row = QtWidgets.QHBoxLayout()
+        model_row.setContentsMargins(0, 0, 0, 0)
+        model_row.setSpacing(6)
+        model_row.addWidget(self.model_combo, 1)
+        model_row.addWidget(self.model_load_btn)
+        model_row_widget = QtWidgets.QWidget()
+        model_row_widget.setLayout(model_row)
+        layout.addWidget(model_row_widget)
 
         if self.show_maker:
             self.maker_label = QtWidgets.QLabel("")
@@ -63,30 +88,33 @@ class LlmSettingsPanel(QtWidgets.QFrame):
             self.maker_label.setVisible(False)
             layout.addWidget(self.maker_label)
 
-        ctx_row = QtWidgets.QHBoxLayout()
-        ctx_label = QtWidgets.QLabel("Context (tokens):")
+        params_row = QtWidgets.QHBoxLayout()
+        params_row.setContentsMargins(0, 0, 0, 0)
+        params_row.setSpacing(10)
+        ctx_label = QtWidgets.QLabel("Context")
         ctx_label.setStyleSheet("color: #f5f5f5;")
-        self.ctx_spin = QtWidgets.QSpinBox()
-        self.ctx_spin.setRange(512, 1048576)
-        self.ctx_spin.setSingleStep(512)
-        self.ctx_spin.setValue(self.default_ctx)
-        self.ctx_spin.valueChanged.connect(self.ctx_changed.emit)
-        ctx_row.addWidget(ctx_label)
-        ctx_row.addWidget(self.ctx_spin, 1)
-        ctx_row_widget = QtWidgets.QWidget()
-        ctx_row_widget.setLayout(ctx_row)
-        layout.addWidget(ctx_row_widget)
+        self.ctx_edit = QtWidgets.QLineEdit()
+        self.ctx_edit.setText("16384")
+        self.ctx_edit.setFixedWidth(90)
+        self.ctx_edit.editingFinished.connect(self._emit_ctx_changed)
+        temp_label = QtWidgets.QLabel("Temp")
+        temp_label.setStyleSheet("color: #f5f5f5;")
+        self.temp_edit = QtWidgets.QLineEdit()
+        self.temp_edit.setText("0.7")
+        self.temp_edit.setFixedWidth(60)
+        params_row.addWidget(ctx_label)
+        params_row.addWidget(self.ctx_edit)
+        params_row.addSpacing(8)
+        params_row.addWidget(temp_label)
+        params_row.addWidget(self.temp_edit)
+        params_row.addStretch(1)
+        params_row_widget = QtWidgets.QWidget()
+        params_row_widget.setLayout(params_row)
+        layout.addWidget(params_row_widget)
+        # Provide compatibility adapter for existing code paths
+        self.ctx_spin = _SpinAdapter(self.ctx_edit, default=16384)
 
-        if self.show_current:
-            self.current_model_label = QtWidgets.QLabel("Model: None")
-            self.current_model_label.setWordWrap(True)
-            self.current_model_label.setStyleSheet("font-size: 10px; color: #f5f5f5; font-weight: bold;")
-            layout.addWidget(self.current_model_label)
-
-        self.status_label = QtWidgets.QLabel("Ready")
-        self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet("font-size: 10px; color: #f5f5f5;")
-        layout.addWidget(self.status_label)
+        # No other rows per spec
 
         layout.addStretch(1)
         self.setLayout(layout)
@@ -113,19 +141,39 @@ class LlmSettingsPanel(QtWidgets.QFrame):
         self.model_combo.blockSignals(False)
 
     def set_current_model(self, text: str) -> None:
-        if self.current_model_label:
-            self.current_model_label.setText(f"Model: {text}")
+        self._update_model_status(text)
 
     def set_status(self, text: str) -> None:
-        if self.status_label:
-            self.status_label.setText(text)
+        # Status label removed; no-op to preserve compatibility
+        return
 
     def set_maker(self, maker: str) -> None:
-        if self.maker_label:
-            self.maker_label.setText(maker)
-            self.maker_label.setVisible(bool(maker))
+        # Maker label removed; no-op to preserve compatibility
+        return
 
     def _on_load_clicked(self) -> None:
         if self.model_combo:
             model = self.model_combo.currentData() or self.model_combo.currentText()
             self.model_load_requested.emit(model)
+
+    def _emit_ctx_changed(self) -> None:
+        if not self.ctx_edit:
+            return
+        text = self.ctx_edit.text().strip()
+        try:
+            value = int(text)
+        except Exception:
+            value = 16384
+            self.ctx_edit.setText(str(value))
+        self.ctx_changed.emit(value)
+
+    def _update_model_status(self, text: Optional[str]) -> None:
+        if not self.model_status_label:
+            return
+        prefix = self.title
+        if text and text.strip():
+            self.model_status_label.setText(f"{prefix}: {text}")
+            self.model_status_label.setStyleSheet("font-size: 12px; font-weight: 700; color: #f5f5f5;")
+        else:
+            self.model_status_label.setText(f"{prefix}: None")
+            self.model_status_label.setStyleSheet("font-size: 12px; font-weight: 700; color: #ff4444;")

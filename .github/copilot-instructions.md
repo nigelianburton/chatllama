@@ -30,6 +30,8 @@ ChatLlama is a PyQt6-based chat interface for local LLMs with agent/MCP support.
 - **src/chatllama_subpanel_llmsettings.py**: Shared settings UI for model selection, context, load button
 - **src/chatllama_cpp.py**: Handler for local llama-cpp-python backend
 - **src/chatllama_lmstudio.py**: Handler for LM Studio remote backend
+- **src/_card_template.py**: Card template base class with 4:3 aspect ratio (MCP-like interface)
+- **src/card_*.py**: Card implementations (e.g., card_chrome.py for embedded browser)
 - **Models**: GGUF models stored in `D:\LLM Models\{author}\{model-name}-GGUF`
 - **Backend**: llama-cpp-python for inference, configured to use LM Studio's llama.cpp v1.103.2
 - **MCP Servers**: Test servers in `test_mcp/` for tool discovery and execution
@@ -88,6 +90,24 @@ Adaptive message display with three layout modes:
 - **Send**: Included in message metadata as `images` key
 - **Rendering**: Displayed in MessageBubble text+image layout
 
+### Card System
+
+**MCP-Like Cards** (`src/_card_template.py` + `src/card_*.py`):
+- **Template**: `CardBase` maintains 4:3 aspect ratio via `AspectRatioFrame` (height adapts to width)
+- **Discovery**: All modules matching `card_*.py` are loaded as card implementations (filters out `_card_template`)
+- **Interface**: Each card exports:
+  - `name` (str): Card identifier
+  - `functions` (list): MCP-like function metadata (name, description, parameters)
+  - `call(name, arguments)`: Execute a function; return result or raise error
+- **LLM Integration**: Cards advertised to model as if they were MCPs; LLM can invoke card functions
+- **Example**: `card_chrome.py` embeds `QWebEngineView` for browser control
+  - Function: `open_url(url)` loads a URL into the 4:3 embedded browser pane
+
+**Settings Panel Integration**:
+- Multiple MCP subpanels can scroll vertically within Settings
+- Cards are discoverable and advertised alongside MCPs to the LLM
+- No fallbacks: Cards must be explicitly listed or discovered by pattern
+
 ### Panel Toggle Logic
 
 **Common Code** (`_toggle_panel()` method):
@@ -140,6 +160,12 @@ Adaptive message display with three layout modes:
 - [x] Modern Python project structure (pyproject.toml, .python-version)
 - [x] Development tooling (black, ruff, mypy, pytest)
 - [x] Comprehensive architecture documentation (docs/ARCHITECTURE.md)
+- [x] Settings panel with vertical scroll for multiple MCP servers
+- [x] Per-server MCP subpanels with fixed server support (no selector if only one)
+- [x] Card template with 4:3 aspect ratio preservation
+- [x] Card discovery pattern (card_*.py modules)
+- [x] MCP-like card interface (name, functions, call)
+- [x] PyQt6-WebEngine integration for card_chrome browser card
 
 ### TODO 📋
 
@@ -296,6 +322,14 @@ See `test_mcp/README.md` for details.
 3. If not running, auto-launch on port 8000
 4. Retry with llama-server
 
+### UI Architecture (Refactored)
+- **SettingsPanel**: Vertical-scrollable QScrollArea containing:
+  - LlmSettingsPanel (Local backend with 3 rows: model+backend, dropdown+Load, context+temp)
+  - LlmSettingsPanel (LM Studio backend, toggled via LMS button in header)
+  - Per-server McpInfoPanel instances (MCP selector hidden if only 1 server)
+- **No internal toolbars**: All column headers integrate with outer frame (e.g., "Settings" header contains LMS toggle)
+- **HeaderRow** in wrap_with_caption: Title label + optional controls (LMS button in Settings)
+
 ### MCP Client
 - Spawns server process with stdio pipes
 - Creates async session using `ClientSession`
@@ -323,6 +357,9 @@ See `test_mcp/README.md` for details.
 - Comments for complex logic
 - **Always verify syntax**: Run `python -m py_compile src/chat.py` after editing Python files to catch syntax errors before finishing
 
+## Operational Rules
+
+- No fallbacks: Do not implement silent or automatic fallbacks across transports or backends. Fail fast and surface clear errors. MCP configuration must come solely from `settings.yml`.
 ## Resources
 
 - [llama-cpp-python](https://github.com/abetlen/llama-cpp-python)
