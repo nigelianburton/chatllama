@@ -73,41 +73,44 @@ FASHION_LOOKS_2026 = [
 
 @server.tool()
 def get_fashion_look() -> dict:
-    """Get a cool woman's fashion look for 2026, randomly selected.
+    """Get a hot woman's fashion trend for 2026, randomly selected.
     
+    These are the most anticipated fashion trends that will be hot in 2026.
     Returns a complete outfit inspiration with name, description, key items, colors, and vibe.
     """
     look = random.choice(FASHION_LOOKS_2026)
     return {
         "success": True,
         "look": look,
-        "styling_tip": f"For {look['name']}, pair these items with confidence and your personal flair!",
+        "styling_tip": f"{look['name']} is trending big in 2026! Pair these items with confidence and your personal flair!",
         "total_looks_available": len(FASHION_LOOKS_2026)
     }
 
 
 @server.tool()
 def get_all_looks() -> dict:
-    """Get all available fashion looks for 2026.
+    """Get all hot fashion trends for 2026.
     
-    Returns a list of all fashion looks with their details.
+    Returns a complete list of the hottest anticipated fashion looks for 2026.
+    These are the trends expected to dominate the fashion scene.
     """
     return {
         "success": True,
         "total_looks": len(FASHION_LOOKS_2026),
-        "looks": FASHION_LOOKS_2026
+        "looks": FASHION_LOOKS_2026,
+        "note": "These are the hottest fashion trends predicted for 2026"
     }
 
 
 @server.tool()
 def get_look_by_vibe(vibe: str) -> dict:
-    """Get a fashion look that matches a specific vibe/mood.
+    """Get a hot 2026 fashion trend that matches a specific vibe/mood.
     
     Args:
         vibe: The desired vibe (e.g., 'bold', 'sophisticated', 'romantic', 'modern')
     
     Returns:
-        A fashion look matching or similar to the requested vibe.
+        A hot 2026 fashion trend matching or similar to the requested vibe.
     """
     vibe_lower = vibe.lower()
     matching_looks = [

@@ -12,15 +12,98 @@ ChatLlama is a PyQt6-based chat interface for local LLMs with agent/MCP support.
 ## Architecture
 
 ### Core Components
-- **src/chat.py**: Main PyQt6 application with refactored UI panels
-  - **SettingsPanel**: Model selection, context length, GPU offload, load button
-  - **ChatPanel**: Message history and input field
+- **src/chat.py**: Main PyQt6 application with refactored UI panels and toolbars
+  - **Main Window Layout**: Four-column splitter (Settings, Chat, Cards, Trace) with toolbar control buttons
+  - **Toolbars**: Each panel has a 48px toolbar with caption and toggle button
+  - **SettingsPanel**: Model selection (via LlmSettingsPanel subpanels for Local/LM Studio)
+  - **ChatPanel**: Message history (MessageBubble widgets), user input with image attachments
   - **CardsPanel**: Cards display (placeholder for future expansion)
+  - **TracePanel**: Debugging/trace output (collapsed by default)
+- **src/chatllama_pane_settings.py**: Settings column widget with stacked LlmSettingsPanel instances
+- **src/chatllama_pane_chat.py**: Chat column with message history (QListWidget + MessageBubble) and input
+  - **PromptInput**: Custom QTextEdit with Enter-to-send, Ctrl+Enter for newline
+  - **MessageBubble**: Adaptive message display widget (text-only, text+image, text+tool-calls)
+  - Image attachments: Drag-and-drop up to 3 images; thumbnails display right of input
+- **src/chatllama_pane_cards.py**: Cards display placeholder
+- **src/chatllama_pane_hwinfo.py**: GPU/hardware info panel (status bar widget)
+- **src/chatllama_pane_trace.py**: Trace/debug output panel (QPlainTextEdit, dark theme)
+- **src/chatllama_subpanel_llmsettings.py**: Shared settings UI for model selection, context, load button
+- **src/chatllama_cpp.py**: Handler for local llama-cpp-python backend
+- **src/chatllama_lmstudio.py**: Handler for LM Studio remote backend
 - **Models**: GGUF models stored in `D:\LLM Models\{author}\{model-name}-GGUF`
 - **Backend**: llama-cpp-python for inference, configured to use LM Studio's llama.cpp v1.103.2
 - **MCP Servers**: Test servers in `test_mcp/` for tool discovery and execution
 - **Configuration**: `pyproject.toml` (modern Python project), `settings.yml` (app settings)
 - **Documentation**: `docs/ARCHITECTURE.md` for detailed system design
+
+### UI Panel Architecture
+
+**Four-Column Layout** (all collapsible via toolbar buttons):
+1. **Settings** (visible by default) - ⚙️ button
+   - Stacked LlmSettingsPanel for Local and LM Studio backends
+   - Model selection, context length, load button
+   - Status indicators (maker, model info)
+2. **Chat** (visible by default) - 💬 button
+   - Message history (QListWidget with MessageBubble widgets)
+   - User input (PromptInput + image attachments)
+   - Send button (32px height, gray background)
+3. **Cards** (visible by default) - 🖼️ button
+   - Placeholder for future card-based UI
+4. **Trace** (hidden by default) - 🔍 button
+   - Debug/trace output (QPlainTextEdit with green text on dark background)
+
+**Common Panel Features:**
+- 48px toolbar with caption label and toggle button
+- Equal column widths when visible (splitter distributes evenly)
+- Smooth collapse/expand via `_toggle_panel()` method
+- Persisted state (visibility stored in ChatWindow instance variables)
+
+### MessageBubble Widget
+
+Adaptive message display with three layout modes:
+- **Text-only**: Simple text in rounded rectangle
+- **Text + Image**: Text on left (50%), square thumbnail (100×100) on right
+- **Text + Tool-Calls**: Text on left (50%), tool info grid on right (50%)
+  - Tool summary: 1×3 grid (ID, Type, Function)
+  - Parameters: 2×n grid (name | value)
+
+**Styling:**
+- Type overlay (small text, top-left corner, 8pt font)
+- Rounded corners (8px border-radius)
+- Color-coded by message type (instruction, reply, thinking, tool_request, tool_response, error)
+- Tight padding (0,0,0,0 frame margin; 1px content padding; 3px outer inset)
+- Single selection mode in QListWidget
+
+**Creation:**
+- All bubbles created via `_create_message_bubble()` method
+- Tracked in `self.message_widgets` list [(bubble, list_item), ...]
+- Automatic height calculation based on content
+- Image loading with fallback placeholder
+
+### Image Attachments
+
+- **Drag-and-drop**: Up to 3 images onto PromptInput
+- **Display**: Thumbnails (64×64) stack horizontally to right of input
+- **Storage**: Paths stored in `self._attachments` list
+- **Send**: Included in message metadata as `images` key
+- **Rendering**: Displayed in MessageBubble text+image layout
+
+### Panel Toggle Logic
+
+**Common Code** (`_toggle_panel()` method):
+- Takes panel index (0=Settings, 1=Chat, 2=Cards, 3=Trace)
+- Toggles visibility state boolean
+- Updates button appearance (blue when visible, gray when hidden)
+- Recalculates sizes via `_apply_splitter_sizes()` (equal width distribution)
+- No side effects on other panels
+
+### Hardware Info Panel
+
+- Fixed width (92px)
+- Shows GPU VRAM, utilization %, token counts
+- Updates every second via QTimer
+- Integrated into main toolbar
+- Monospace font for alignment
 
 ### Data Flow
 1. User types message → added to message history

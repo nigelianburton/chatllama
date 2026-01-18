@@ -1,0 +1,64 @@
+When using llama-cpp-python with a modern GGUF like Gemma 3-27B, you don't actually have to "guess" or hardcode the text for the structured declaration block. The information is embedded directly in the GGUF file's metadata.
+
+Here is how you can find and use it programmatically.
+
+1. Extracting the Template from Metadata
+Modern GGUF files include a key called tokenizer.chat_template. This is a Jinja2 template that describes exactly how to format the system prompt, user messages, and—importantly—the tools (functions).
+
+You can extract it using llama-cpp-python like this:
+
+Python
+from llama_cpp import Llama
+
+# Load the model
+llm = Llama(model_path="gemma-3-27b-it.Q4_K_M.gguf", verbose=False)
+
+# Access the GGUF metadata
+metadata = llm.metadata
+chat_template = metadata.get("tokenizer.chat_template")
+
+print(chat_template)
+2. How the "Declaration Block" is Structured
+For Gemma 3, Google moved toward a very flexible "instruct-based" tool calling system. Unlike earlier models that used rigid XML tags like <tool_call>, Gemma 3's official template (if properly baked into the GGUF) typically looks for a tools variable.
+
+If you inspect the Jinja2 string you just extracted, you will likely see logic like this:
+
+Django
+{% if tools %}
+  {# Logic to iterate through tools and print their JSON schemas #}
+  {% for tool in tools %}
+    ...
+  {% endfor %}
+{% endif %}
+3. Let llama-cpp-python Handle It Automatically
+Since you are building a chat app, you should use the OpenAI-compatible high-level API provided by llama-cpp-python. When you use create_chat_completion and pass a tools list, the library automatically looks at that GGUF metadata and formats the "declaration block" for you.
+
+Example Implementation:
+
+Python
+response = llm.create_chat_completion(
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What's the weather in Tokyo?"}
+    ],
+    tools=[{
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get current weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"location": {"type": "string"}},
+                "required": ["location"]
+            }
+        }
+    }],
+    tool_choice="auto"
+)
+4. What the final text actually looks like
+If you were to peek at the raw string being sent to Gemma 3 after the template is applied, it usually follows Google's recommended "Tool Code" format:
+
+System Instruction: "At each turn, if you decide to invoke any of the function(s), it should be wrapped with ```tool_code```. ... [JSON Schema of your tools here] ..."
+
+Why Gemma 3 is different
+Unlike Gemma 2 (which used specific control tokens like <start_of_turn>), Gemma 3 is designed to be highly "instructable." Google's current guidance for Gemma 3 is to provide the tool definitions as a clear JSON list within the system/user context and ask the model to output a Python-style call or a JSON object inside a specific markdown block.

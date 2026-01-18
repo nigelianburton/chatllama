@@ -1,0 +1,3 @@
+# Quick test - just one question
+What is the capital of France?
+EXIT

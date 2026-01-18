@@ -1,0 +1,3 @@
+# Quick test with Gemma model
+What is the capital of France?
+EXIT

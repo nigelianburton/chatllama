@@ -99,8 +99,12 @@ logger.debug(f"Added DLL directory: {lm_studio_path}")
 from llama_cpp import Llama
 from PyQt6 import QtCore, QtGui, QtWidgets
 from chatllama_pane_settings import SettingsPanel
+from chatllama_cpp import ChatLlamaCpp
+from chatllama_lmstudio import ChatLlamaLmStudio
 from chatllama_pane_chat import PromptInput, ChatPanel
 from chatllama_pane_cards import CardsPanel
+from chatllama_pane_trace import TracePanel
+from chatllama_pane_hwinfo import HardwareInfoPanel
 
 
 class ModelCapabilities:
@@ -303,12 +307,30 @@ class ChatWorker(QtCore.QObject):
         """Stream chat completion and emit chunks."""
         try:
             response_text = ""
-            for chunk in self.model.create_chat_completion(messages=self.messages, stream=True):
+            # Build the completion request (tools now injected via system prompt)
+            completion_kwargs = {
+                "messages": self.messages,
+                "stream": True
+            }
+            logger.debug(f"Starting chat completion with {len(self.messages)} messages")
+            
+            chunk_count = 0
+            last_log_length = 0
+            for chunk in self.model.create_chat_completion(**completion_kwargs):
+                chunk_count += 1
+                if chunk_count <= 5 or chunk_count % 200 == 0:
+                    logger.debug(f"Chunk #{chunk_count}")
+                
                 delta = chunk.get("choices", [{}])[0].get("delta", {})
                 content = delta.get("content", "")
                 if content:
                     response_text += content
                     self.chunk_ready.emit(content)
+                    
+                    # Log accumulated text every 100 characters
+                    if len(response_text) >= last_log_length + 100:
+                        logger.debug(f"[Text at {len(response_text)} chars] {response_text[last_log_length:last_log_length+100]}")
+                        last_log_length = len(response_text)
                 
                 # Capture usage stats from the final chunk
                 usage = chunk.get("usage")
@@ -319,12 +341,16 @@ class ChatWorker(QtCore.QObject):
                         "total_tokens": usage.get("total_tokens", 0)
                     }
             
+            logger.debug(f"Streaming complete: {chunk_count} chunks, {len(response_text)} total chars")
+            logger.info(f"Final response: {response_text[:200]}..." if len(response_text) > 200 else f"Final response: {response_text}")
+            
             # Emit usage stats if available
             if self.usage_stats["total_tokens"] > 0:
                 self.usage_ready.emit(self.usage_stats)
             
             self.finished.emit()
         except Exception as e:
+            logger.exception(f"ChatWorker error: {e}")
             self.error_occurred.emit(str(e))
 
 
@@ -345,8 +371,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._settings_panel: Optional[SettingsPanel] = None
         self._chat_panel: Optional[ChatPanel] = None
         self._cards_panel: Optional[CardsPanel] = None
+        self._trace_panel: Optional[TracePanel] = None
         self._main_splitter = None
         self._settings_collapsed = False
+        self._cards_collapsed = False
+        self._trace_collapsed = True  # Collapsed by default
         self._model = None
         self._messages: list[dict] = [
             {"role": "system", "content": "You are a helpful assistant."}
@@ -356,7 +385,10 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._use_llama_server = False
         self._llama_server_process = None
         self._mcp_server_process = None
+        self._mcp_tools = None  # Will be populated during chat
         self._last_local_model: Optional[str] = None  # Store local model when switching modes
+        self._cpp_handler: Optional[ChatLlamaCpp] = None
+        self._lmstudio_handler: Optional[ChatLlamaLmStudio] = None
         
         # Automation mode for testing
         self.input_file = input_file
@@ -365,15 +397,14 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.processing_message = False
         self.selected_model = selected_model  # Model specified via command line
         
-        # GPU monitoring
-        self._gpu_samples: list[tuple[float, float]] = []  # (vram_used_mb, utilization_pct)
-        self._gpu_timer: Optional[QtCore.QTimer] = None
-        self._last_token_usage: dict = {}  # Track last token usage for status bar
+        # Hardware info panel (GPU + token stats)
+        self._hwinfo_panel: Optional[HardwareInfoPanel] = None
         
         self._build_ui()
         self._check_and_launch_mcp_server()
         self._load_default_model()
-        self._start_gpu_monitoring()
+        if self._hwinfo_panel:
+            self._hwinfo_panel.start_monitoring()
         
         # Load automation messages if in automation mode
         if self.automation_mode:
@@ -401,8 +432,13 @@ class ChatWindow(QtWidgets.QMainWindow):
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
+        # Create hardware info panel early so toolbar can embed it
+        if self._hwinfo_panel is None:
+            self._hwinfo_panel = HardwareInfoPanel()
+
         toolbar = self._build_toolbar()
         self._main_splitter = self._build_main_splitter()
+        self._apply_splitter_sizes()
 
         root_layout.addWidget(toolbar)
         root_layout.addWidget(self._main_splitter, 1)
@@ -430,11 +466,121 @@ class ChatWindow(QtWidgets.QMainWindow):
         layout.addWidget(title)
         layout.addStretch(1)
 
+        # Settings toggle button with blue background when active (set)
         toggle_btn = QtWidgets.QPushButton("☰")
         toggle_btn.setMaximumWidth(48)
         toggle_btn.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
+        toggle_btn.setCheckable(True)
+        toggle_btn.setChecked(True)  # Set by default (settings visible)
+        self._settings_toggle_btn = toggle_btn  # Store reference
         toggle_btn.clicked.connect(self._toggle_settings)
+        
+        # Style the button with blue when checked, gray when unchecked
+        toggle_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #4a7fd7;
+                color: #ffffff;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 10px;
+                font-weight: 600;
+                font-size: 18px;
+            }
+            QPushButton:hover {
+                background-color: #5a8fe7;
+            }
+            QPushButton:pressed {
+                background-color: #3a6fc7;
+            }
+            QPushButton:!checked {
+                background-color: #666666;
+            }
+            QPushButton:!checked:hover {
+                background-color: #767676;
+            }
+            """
+        )
         layout.addWidget(toggle_btn)
+
+        # Cards toggle button with blue background when active (set)
+        cards_btn = QtWidgets.QPushButton("🖼️")
+        cards_btn.setMaximumWidth(48)
+        cards_btn.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
+        cards_btn.setCheckable(True)
+        cards_btn.setChecked(True)  # Set by default (cards visible)
+        self._cards_toggle_btn = cards_btn  # Store reference
+        cards_btn.clicked.connect(self._toggle_cards)
+        
+        # Style the button with blue when checked, gray when unchecked
+        cards_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #4a7fd7;
+                color: #ffffff;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 10px;
+                font-weight: 600;
+                font-size: 18px;
+            }
+            QPushButton:hover {
+                background-color: #5a8fe7;
+            }
+            QPushButton:pressed {
+                background-color: #3a6fc7;
+            }
+            QPushButton:!checked {
+                background-color: #666666;
+            }
+            QPushButton:!checked:hover {
+                background-color: #767676;
+            }
+            """
+        )
+        layout.addWidget(cards_btn)
+
+        # Trace toggle button (collapsed by default, so gray)
+        trace_btn = QtWidgets.QPushButton("🔍")
+        trace_btn.setMaximumWidth(48)
+        trace_btn.setCursor(QtGui.QCursor(QtCore.Qt.CursorShape.PointingHandCursor))
+        trace_btn.setCheckable(True)
+        trace_btn.setChecked(False)  # Collapsed by default
+        self._trace_toggle_btn = trace_btn  # Store reference
+        trace_btn.clicked.connect(self._toggle_trace)
+        
+        # Style the button with blue when checked, gray when unchecked
+        trace_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #4a7fd7;
+                color: #ffffff;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 10px;
+                font-weight: 600;
+                font-size: 18px;
+            }
+            QPushButton:hover {
+                background-color: #5a8fe7;
+            }
+            QPushButton:pressed {
+                background-color: #3a6fc7;
+            }
+            QPushButton:!checked {
+                background-color: #666666;
+            }
+            QPushButton:!checked:hover {
+                background-color: #767676;
+            }
+            """
+        )
+        layout.addWidget(trace_btn)
+
+        # Hardware info panel on toolbar (GPU + tokens)
+        if self._hwinfo_panel:
+            self._hwinfo_panel.setMaximumWidth(360)
+            layout.addWidget(self._hwinfo_panel)
 
         bar.setLayout(layout)
         return bar
@@ -447,59 +593,167 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._settings_panel = SettingsPanel(default_ctx=DEFAULT_CTX)
         self._chat_panel = ChatPanel()
         self._cards_panel = CardsPanel()
+        self._trace_panel = TracePanel()
+
+        self._cpp_handler = ChatLlamaCpp(self)
+        self._lmstudio_handler = ChatLlamaLmStudio(self)
+
+        def apply_equal_policy(widget: QtWidgets.QWidget) -> None:
+            policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Preferred)
+            policy.setHorizontalStretch(1)
+            widget.setMinimumWidth(0)
+            widget.setSizePolicy(policy)
+
+        for panel in (self._settings_panel, self._chat_panel, self._cards_panel, self._trace_panel):
+            apply_equal_policy(panel)
+
+        # Wrap each pane with a title label so captions are always visible
+        def wrap_with_caption(title: str, widget: QtWidgets.QWidget) -> QtWidgets.QWidget:
+            container = QtWidgets.QWidget()
+            policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Preferred)
+            policy.setHorizontalStretch(1)
+            container.setMinimumWidth(0)
+            container.setSizePolicy(policy)
+            vbox = QtWidgets.QVBoxLayout()
+            vbox.setContentsMargins(0, 0, 0, 0)
+            vbox.setSpacing(0)
+
+            toolbar = QtWidgets.QWidget()
+            toolbar.setFixedHeight(48)
+            hbox = QtWidgets.QHBoxLayout()
+            hbox.setContentsMargins(12, 0, 12, 0)
+            hbox.setSpacing(8)
+
+            title_label = QtWidgets.QLabel(title)
+            title_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignVCenter | QtCore.Qt.AlignmentFlag.AlignLeft)
+
+            title_lower = title.lower()
+            if title_lower == "settings":
+                container.setStyleSheet("background-color: #30343a;")
+                title_label.setStyleSheet("font-size: 15px; font-weight: 700; color: #f5f5f5;")
+                toolbar.setStyleSheet("background-color: #3a3f46;")
+            elif title_lower == "chat":
+                container.setStyleSheet("background-color: #30343a;")
+                title_label.setStyleSheet("font-size: 15px; font-weight: 700; color: #f5f5f5;")
+                toolbar.setStyleSheet("background-color: #3a3f46;")
+            elif title_lower == "trace":
+                container.setStyleSheet("background-color: #1a1a1a;")
+                title_label.setStyleSheet("font-size: 15px; font-weight: 700; color: #00ff00;")
+                toolbar.setStyleSheet("background-color: #222222;")
+            else:  # cards
+                container.setStyleSheet("background-color: #2a2d32;")
+                title_label.setStyleSheet("font-size: 15px; font-weight: 700; color: #f5f5f5;")
+                toolbar.setStyleSheet("background-color: #33373d;")
+
+            hbox.addWidget(title_label)
+            hbox.addStretch(1)
+            toolbar.setLayout(hbox)
+
+            vbox.addWidget(toolbar)
+            vbox.addWidget(widget)
+            container.setLayout(vbox)
+            widget.setSizePolicy(policy)
+            return container
+
+        settings_wrap = wrap_with_caption("Settings", self._settings_panel)
+        chat_wrap = wrap_with_caption("Chat", self._chat_panel)
+        cards_wrap = wrap_with_caption("Cards", self._cards_panel)
+        trace_wrap = wrap_with_caption("Trace", self._trace_panel)
         
-        # Connect signals from settings panel
-        self._settings_panel.model_load_requested.connect(self._on_load_model_clicked)
-        self._settings_panel.model_selection_changed.connect(self._on_model_selection_changed)
-        self._settings_panel.ctx_changed.connect(self._on_ctx_changed)
-        self._settings_panel.mode_changed.connect(self._on_mode_changed)
+        # Connect signals from settings subpanels
+        if self._cpp_handler:
+            self._settings_panel.cpp_panel.model_load_requested.connect(self._cpp_handler.load_model)
+            self._settings_panel.cpp_panel.model_selection_changed.connect(self._cpp_handler.on_selection_changed)
+        self._settings_panel.cpp_panel.ctx_changed.connect(self._on_ctx_changed)
+
+        if self._lmstudio_handler:
+            self._settings_panel.lmstudio_panel.model_load_requested.connect(self._lmstudio_handler.load_model)
+            self._settings_panel.lmstudio_panel.model_selection_changed.connect(self._lmstudio_handler.on_selection_changed)
+        self._settings_panel.lmstudio_panel.ctx_changed.connect(self._on_lmstudio_ctx_changed)
         
         # Connect signals from chat panel
         self._chat_panel.send_requested.connect(lambda text: self._on_send_message())
         
         # Populate models in settings panel
-        self._populate_models_with_capabilities()
+        if self._cpp_handler:
+            self._cpp_handler.populate_models_with_capabilities()
+        if self._lmstudio_handler:
+            self._lmstudio_handler.populate_models_with_capabilities()
 
-        splitter.addWidget(self._settings_panel)
-        splitter.addWidget(self._chat_panel)
-        splitter.addWidget(self._cards_panel)
+        splitter.addWidget(settings_wrap)
+        splitter.addWidget(chat_wrap)
+        splitter.addWidget(cards_wrap)
+        splitter.addWidget(trace_wrap)
 
-        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 1)
-        splitter.setSizes([384, 1000, 1000])
+        splitter.setStretchFactor(3, 1)
 
         return splitter
 
     def _toggle_settings(self) -> None:
-        if not self._settings_panel or not self._main_splitter:
+        self._toggle_panel(0, self._settings_panel, self._settings_toggle_btn, "_settings_collapsed")
+    
+    def _toggle_cards(self) -> None:
+        self._toggle_panel(2, self._cards_panel, self._cards_toggle_btn, "_cards_collapsed")
+    
+    def _toggle_trace(self) -> None:
+        self._toggle_panel(3, self._trace_panel, self._trace_toggle_btn, "_trace_collapsed")
+    
+    def _toggle_panel(self, index: int, panel: QtWidgets.QWidget, btn: QtWidgets.QPushButton, collapsed_attr: str) -> None:
+        """Common method to toggle panel visibility and rebalance widths."""
+        if not panel or not self._main_splitter or not btn:
             return
 
-        if self._settings_collapsed:
-            self._settings_panel.setMaximumWidth(384)
-            self._main_splitter.setSizes([384, 1000, 1000])
-            self._settings_collapsed = False
-        else:
-            self._settings_panel.setMaximumWidth(0)
-            self._main_splitter.setSizes([0, 1000, 1000])
-            self._settings_collapsed = True
+        collapsed = getattr(self, collapsed_attr, False)
+        collapsed = not collapsed
+        setattr(self, collapsed_attr, collapsed)
+
+        panel.setVisible(not collapsed)
+        btn.setChecked(not collapsed)
+
+        self._apply_splitter_sizes()
+
+    def _apply_splitter_sizes(self) -> None:
+        """Ensure all visible columns share equal width; hidden ones are zero."""
+        if not self._main_splitter:
+            return
+
+        flags = [
+            not self._settings_collapsed,
+            True,  # chat always visible
+            not self._cards_collapsed,
+            not self._trace_collapsed,
+        ]
+
+        sizes = [1000 if flag else 0 for flag in flags]
+        self._main_splitter.setSizes(sizes)
     
     # Properties for backwards compatibility with old direct widget access
     @property
     def _model_combo(self):
-        return self._settings_panel.model_combo if self._settings_panel else None
+        if self._settings_panel and self._settings_panel.cpp_panel:
+            return self._settings_panel.cpp_panel.model_combo
+        return None
     
     @property
     def _status_label(self):
-        return self._settings_panel.status_label if self._settings_panel else None
+        if self._settings_panel and self._settings_panel.cpp_panel:
+            return self._settings_panel.cpp_panel.status_label
+        return None
     
     @property
     def _ctx_spin(self):
-        return self._settings_panel.ctx_spin if self._settings_panel else None
+        if self._settings_panel and self._settings_panel.cpp_panel:
+            return self._settings_panel.cpp_panel.ctx_spin
+        return None
     
     @property
     def _maker_label(self):
-        return self._settings_panel.maker_label if self._settings_panel else None
+        if self._settings_panel and self._settings_panel.cpp_panel:
+            return self._settings_panel.cpp_panel.maker_label
+        return None
     
     @property
     def _history_widget(self):
@@ -734,22 +988,34 @@ class ChatWindow(QtWidgets.QMainWindow):
         """Scan MODELS_DIR for model folders, searching through author subfolders."""
         return self._discover_models_static()
 
-    def _on_load_model_clicked(self) -> None:
-        """Load the selected model from the combo box."""
-        if not self._model_combo:
-            return
-        # Get the original model path from userData
-        model_path = self._model_combo.currentData()
-        if not model_path:
-            # Fallback to current text if userData not set
-            model_path = self._model_combo.currentText()
-        
+    def _on_load_model_clicked(self, model_path: Optional[str] = None) -> None:
+        """Load the selected local model."""
+        if not model_path and self._model_combo:
+            model_path = self._model_combo.currentData() or self._model_combo.currentText()
         if model_path:
-            # Check the current mode and load accordingly
-            if self._settings_panel and self._settings_panel.mode == "lm_studio":
-                self._load_lm_studio_model(model_path)
-            else:
-                self._load_model(model_path)
+            self._load_model(model_path)
+
+    def _on_load_lmstudio_clicked(self, model_id: Optional[str] = None) -> None:
+        """Load the selected LM Studio model."""
+        combo = self._settings_panel.lmstudio_panel.model_combo if self._settings_panel else None
+        if not model_id and combo:
+            model_id = combo.currentData() or combo.currentText()
+        if model_id:
+            self._load_lm_studio_model(model_id)
+
+    def _on_lmstudio_selection_changed(self, index: int) -> None:
+        # Update status to reflect selected LM Studio model
+        combo = self._settings_panel.lmstudio_panel.model_combo if self._settings_panel else None
+        status_label = self._settings_panel.lmstudio_panel.status_label if self._settings_panel else None
+        if combo and status_label:
+            current = combo.itemData(index) or combo.itemText(index)
+            status_label.setText(f"Selected: {current}")
+
+    def _on_lmstudio_ctx_changed(self, value: int) -> None:
+        # LM Studio context change acknowledgement
+        status_label = self._settings_panel.lmstudio_panel.status_label if self._settings_panel else None
+        if status_label:
+            status_label.setText(f"Context set to {value}")
 
     def _is_mcp_server_running(self) -> bool:
         """Check if MCP server process is running.
@@ -886,8 +1152,38 @@ class ChatWindow(QtWidgets.QMainWindow):
             logger.debug(f"Failed to fetch MCP tools via MCP protocol: {e}")
             return None
 
+    def _build_tool_prompt(self, tools: list) -> str:
+        """Build a system prompt section with tools using the preamble from settings.yml.
+        
+        Format matches LM Studio approach with [TOOL_REQUEST] and [END_TOOL_REQUEST] markers.
+        Uses the tool_preamble from settings.yml with {tools_json} placeholder replacement.
+        
+        Args:
+            tools: List of tool definitions (MCP ToolDescription objects)
+            
+        Returns:
+            Formatted prompt section with tools and instructions
+        """
+        if not tools:
+            return ""
+        
+        # Convert to OpenAI format first
+        openai_tools = self._convert_mcp_tools_to_openai_format(tools)
+        if not openai_tools:
+            return ""
+        
+        # Format tools as JSON string
+        tools_json = json.dumps(openai_tools, indent=2)
+        
+        # Use the preamble from settings.yml and replace {tools_json} placeholder
+        tool_prompt = "\n" + TOOL_PREAMBLE.replace("{tools_json}", tools_json)
+        
+        logger.info(f"Built tool prompt for {len(openai_tools)} tools using settings.yml preamble")
+        logger.debug(f"Tool prompt:\n{tool_prompt}")
+        return tool_prompt
+    
     def _format_tools_for_prompt(self, tools: list) -> str:
-        """Format tool definitions into a readable prompt section.
+        """DEPRECATED: Use _build_tool_prompt instead.
         
         Args:
             tools: List of tool definitions from MCP server
@@ -895,10 +1191,47 @@ class ChatWindow(QtWidgets.QMainWindow):
         Returns:
             Formatted string describing available tools
         """
-        # Return empty string - tools should not be listed in system prompt
-        # The model should only use tools when contextually appropriate
-        # Tool names are handled implicitly during tool execution
-        return ""
+        # Kept for backwards compatibility, delegates to _build_tool_prompt
+        return self._build_tool_prompt(tools)
+
+    def _convert_mcp_tools_to_openai_format(self, mcp_tools: list) -> list:
+        """Convert MCP tool definitions to OpenAI-compatible format.
+        
+        MCP tools come as ToolDescription objects. We convert them to the format
+        expected by llama-cpp-python's create_chat_completion with tools parameter.
+        
+        Args:
+            mcp_tools: List of MCP ToolDescription objects
+            
+        Returns:
+            List of tools in OpenAI format
+        """
+        if not mcp_tools:
+            return []
+        
+        openai_tools = []
+        for tool in mcp_tools:
+            try:
+                # MCP ToolDescription has: name, description, inputSchema
+                tool_def = {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description or "",
+                        "parameters": tool.inputSchema if hasattr(tool, 'inputSchema') else {}
+                    }
+                }
+                openai_tools.append(tool_def)
+                logger.debug(f"Converted tool '{tool.name}' to OpenAI format")
+            except Exception as e:
+                logger.warning(f"Failed to convert tool {tool}: {e}")
+                continue
+        
+        logger.info(f"Converted {len(openai_tools)} MCP tools to OpenAI format")
+        # Log the actual tool definitions being sent
+        for tool in openai_tools:
+            logger.info(f"Tool definition: {json.dumps(tool, indent=2)}")
+        return openai_tools
 
     def _fetch_and_integrate_tools(self) -> None:
         """Fetch MCP tools and integrate them into the system prompt.
@@ -927,34 +1260,57 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._status_label.setText("MCP server: Connected")
 
     def _parse_tool_request(self, text: str) -> Optional[tuple[str, dict]]:
-        """Detect and parse tool invocation hints from model output."""
-        pattern = r"TOOL:\s*([A-Za-z0-9_\-]+)(?:\s+with\s*\[(.*?)\])?"
-        match = re.search(pattern, text, flags=re.IGNORECASE)
+        """Detect and parse LM Studio format tool calls from model output.
+        
+        Looks for [TOOL_REQUEST]...[END_TOOL_REQUEST] blocks containing JSON.
+        Format: [TOOL_REQUEST]{\"name\": \"tool_name\", \"arguments\": {...}}[END_TOOL_REQUEST]
+        
+        Args:
+            text: Model output text
+            
+        Returns:
+            Tuple of (tool_name, arguments_dict) or None if no tool call found
+        """
+        # Pattern: [TOOL_REQUEST] followed by JSON dict followed by [END_TOOL_REQUEST]
+        pattern = r"\[TOOL_REQUEST\]\s*(\{.*?\})\s*\[END_TOOL_REQUEST\]"
+        match = re.search(pattern, text, flags=re.DOTALL)
+        
         if not match:
+            logger.debug("No [TOOL_REQUEST] block found in model output")
+            return None
+        
+        json_str = match.group(1).strip()
+        logger.debug(f"Found TOOL_REQUEST JSON: {json_str}")
+        
+        try:
+            tool_call = json.loads(json_str)
+            tool_name = tool_call.get("name")
+            arguments = tool_call.get("arguments", {})
+            
+            if not tool_name:
+                logger.warning("Tool call JSON missing 'name' field")
+                return None
+            
+            logger.info(f"Parsed tool call: {tool_name} with arguments {arguments}")
+            return tool_name, arguments
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse TOOL_REQUEST JSON: {e}")
+            logger.debug(f"JSON string was: {json_str}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error parsing tool request: {e}")
             return None
 
-        tool_name = match.group(1).strip()
-        raw_params = match.group(2)
-        args: dict[str, str] = {}
-
-        if raw_params:
-            for part in raw_params.split(","):
-                if not part.strip():
-                    continue
-                if "=" in part:
-                    key, value = part.split("=", 1)
-                    args[key.strip()] = value.strip().strip('"').strip("'")
-                else:
-                    # Positional-like value; store with numeric key for visibility
-                    anon_key = f"arg{len(args)+1}"
-                    args[anon_key] = part.strip()
-
-        if not tool_name:
-            return None
-        return tool_name, args
-
-    def _format_tool_result(self, result) -> str:
-        """Convert MCP CallToolResult into readable text for the transcript."""
+    def _format_tool_result(self, result, wrap_in_tags: bool = True) -> str:
+        """Convert MCP CallToolResult into text format for LM Studio protocol.
+        
+        Args:
+            result: MCP CallToolResult object
+            wrap_in_tags: If True, wrap in [TOOL_RESULT]...[END_TOOL_RESULT] tags
+            
+        Returns:
+            Formatted result text, optionally wrapped in tags
+        """
         parts: list[str] = []
 
         try:
@@ -977,12 +1333,17 @@ class ChatWindow(QtWidgets.QMainWindow):
         if parts:
             text = "\n".join(parts)
             # Cap excessively long outputs to keep context manageable
-            return (text[:4000] + "\n... [truncated]") if len(text) > 4000 else text
-
-        try:
-            return json.dumps(result.model_dump(), indent=2)
-        except Exception:
-            return str(result)
+            result_text = (text[:4000] + "\n... [truncated]") if len(text) > 4000 else text
+        else:
+            try:
+                result_text = json.dumps(result.model_dump(), indent=2)
+            except Exception:
+                result_text = str(result)
+        
+        if wrap_in_tags:
+            result_text = f"[TOOL_RESULT]\n{result_text}\n[END_TOOL_RESULT]"
+        
+        return result_text
 
     def _execute_tool_call(self, tool_name: str, arguments: dict) -> Optional[str]:
         """Execute a tool via MCP and return formatted result text."""
@@ -1137,6 +1498,69 @@ class ChatWindow(QtWidgets.QMainWindow):
         except Exception as e:
             logger.exception(f"Failed to launch llama-server: {e}")
             return False
+    
+    def _load_model_from_full_path(self, full_path: str) -> None:
+        """Load a GGUF model from a full file path.
+        
+        Args:
+            full_path: Full path to a GGUF file, e.g., "D:\\LLM Models\\mradermacher\\gemma-3-27b...\\model.gguf"
+        """
+        logger.info(f"Loading model from full path: {full_path}")
+        model_file = Path(full_path)
+        
+        if not model_file.exists():
+            error_msg = f"Model file not found: {full_path}"
+            logger.error(error_msg)
+            self._set_status(error_msg)
+            return
+        
+        if not model_file.suffix.lower() == ".gguf":
+            error_msg = f"File is not a GGUF model: {full_path}"
+            logger.error(error_msg)
+            self._set_status(error_msg)
+            return
+        
+        logger.info(f"Selected model file: {model_file.name} ({model_file.stat().st_size / (1024**3):.2f} GB)")
+        
+        try:
+            status_msg = f"Loading {model_file.name}..."
+            logger.info(status_msg)
+            self._set_status(status_msg)
+            QtWidgets.QApplication.processEvents()
+
+            logger.debug(f"Attempting to load model with llama-cpp-python: {str(model_file)}")
+            # Determine desired context tokens for this model
+            desired_ctx = self._ctx_spin.value() if self._ctx_spin else DEFAULT_CTX
+            self._model = Llama(
+                model_path=str(model_file),
+                n_gpu_layers=-1,
+                n_ctx=desired_ctx,
+                verbose=False,
+            )
+            self._use_llama_server = False
+            
+            success_msg = f"Model loaded (llama-cpp-python): {model_file.name} (ctx {desired_ctx})"
+            logger.info(success_msg)
+            self._set_status(success_msg)
+            self._set_current_model(str(model_file))  # Update current model display
+        except Exception as e:
+            error_msg = f"llama-cpp-python failed: {e}"
+            logger.warning(error_msg)
+            
+            # Fallback: Try llama-server
+            logger.info("Falling back to llama-server...")
+            self._set_status("Model load failed. Trying llama-server...")
+            
+            if self._launch_llama_server(str(model_file)):
+                self._use_llama_server = True
+                success_msg = f"Model loaded (llama-server): {model_file.name}"
+                logger.info(success_msg)
+                self._set_status(success_msg)
+                self._set_current_model(str(model_file))  # Update current model display
+            else:
+                error_msg = f"Both llama-cpp-python and llama-server failed to load model"
+                logger.error(error_msg)
+                self._set_status(error_msg)
 
     def _load_model(self, model_path: str) -> None:
         """Load a GGUF model from the models directory.
@@ -1217,12 +1641,19 @@ class ChatWindow(QtWidgets.QMainWindow):
                 self._set_status(error_msg)
 
     def _load_default_model(self) -> None:
-        """Load the default model on startup in a non-blocking way."""
+        """Load the default model on startup in a non-blocking way.
+        
+        Supports both relative model paths (e.g., "mradermacher/Huihui-LFM2-2.6B-Exp-abliterated-GGUF")
+        and full file paths to GGUF files (e.g., "D:\\LLM Models\\...\\model.gguf").
+        """
         # Use selected_model if provided via command line, otherwise use DEFAULT_MODEL
         model_to_load = self.selected_model if self.selected_model else DEFAULT_MODEL
         logger.info(f"Loading default model: {model_to_load}")
         
-        if self._model_combo:
+        # Check if this is a full file path (contains .gguf or looks like a full path)
+        is_full_path = ".gguf" in model_to_load.lower() or ":\\" in model_to_load or model_to_load.startswith("/")
+        
+        if not is_full_path and self._model_combo:
             # Find the model by userData (original path) since display text now has badges
             idx = -1
             for i in range(self._model_combo.count()):
@@ -1242,7 +1673,10 @@ class ChatWindow(QtWidgets.QMainWindow):
                 logger.debug(f"Available models: {[self._model_combo.itemText(i) for i in range(self._model_combo.count())]}")
         
         self._set_status("Loading default model...")
-        QtCore.QTimer.singleShot(500, lambda: self._load_model(model_to_load))
+        if is_full_path:
+            QtCore.QTimer.singleShot(500, lambda: self._load_model_from_full_path(model_to_load))
+        else:
+            QtCore.QTimer.singleShot(500, lambda: self._load_model(model_to_load))
 
     def _on_mode_changed(self, mode: str) -> None:
         """Handle mode change - refresh model list from appropriate source."""
@@ -1293,32 +1727,39 @@ class ChatWindow(QtWidgets.QMainWindow):
             
             if not models:
                 logger.warning("No models returned from LM Studio API")
-                self._set_status("No models available from LM Studio")
+                lm_status = self._settings_panel.lmstudio_panel.status_label if self._settings_panel else None
+                if lm_status:
+                    lm_status.setText("No models available from LM Studio")
                 return
             
             # Clear and populate combo box
-            if self._model_combo:
-                self._model_combo.clear()
+            lm_combo = self._settings_panel.lmstudio_panel.model_combo if self._settings_panel else None
+            lm_status = self._settings_panel.lmstudio_panel.status_label if self._settings_panel else None
+            if lm_combo:
+                lm_combo.clear()
                 for model_info in models:
                     model_id = model_info.get("id", "unknown")
                     state = model_info.get("state", "unknown")
                     # Display model with state indicator
                     display_text = f"{model_id} ({state})"
-                    self._model_combo.addItem(display_text, userData=model_id)
+                    lm_combo.addItem(display_text, userData=model_id)
                 
                 logger.info(f"Loaded {len(models)} models from LM Studio: {[m.get('id') for m in models]}")
-                self._set_status(f"Loaded {len(models)} models from LM Studio ✓")
+                if lm_status:
+                    lm_status.setText(f"Loaded {len(models)} models from LM Studio ✓")
                 
                 # Select first model
-                if self._model_combo.count() > 0:
-                    self._model_combo.setCurrentIndex(0)
+                if lm_combo.count() > 0:
+                    lm_combo.setCurrentIndex(0)
         
         except requests.exceptions.ConnectionError:
             logger.error(f"Could not connect to LM Studio at 127.0.0.1:{lm_studio_port}")
-            self._set_status("Error: Could not connect to LM Studio (is it running?)")
+            if self._settings_panel and self._settings_panel.lmstudio_panel.status_label:
+                self._settings_panel.lmstudio_panel.status_label.setText("Error: Could not connect to LM Studio (is it running?)")
         except Exception as e:
             logger.error(f"Error fetching models from LM Studio: {e}")
-            self._set_status(f"Error loading LM Studio models: {e}")
+            if self._settings_panel and self._settings_panel.lmstudio_panel.status_label:
+                self._settings_panel.lmstudio_panel.status_label.setText(f"Error loading LM Studio models: {e}")
     
     def _load_lm_studio_model(self, model_id: str) -> None:
         """Load a model in LM Studio by selecting it.
@@ -1342,20 +1783,25 @@ class ChatWindow(QtWidgets.QMainWindow):
             logger.info(f"Model {model_id} state: {state}")
             
             self._set_current_model(model_id)
-            if state == "loaded":
-                self._set_status(f"✓ {model_id} is loaded in LM Studio")
-            else:
-                self._set_status(f"Selected {model_id} (will load when used)")
+            lm_status = self._settings_panel.lmstudio_panel.status_label if self._settings_panel else None
+            if lm_status:
+                if state == "loaded":
+                    lm_status.setText(f"✓ {model_id} is loaded in LM Studio")
+                else:
+                    lm_status.setText(f"Selected {model_id} (will load when used)")
         
         except requests.exceptions.ConnectionError:
             logger.error(f"Could not connect to LM Studio at 127.0.0.1:{lm_studio_port}")
-            self._set_status("Error: Could not connect to LM Studio (is it running?)")
+            if self._settings_panel and self._settings_panel.lmstudio_panel.status_label:
+                self._settings_panel.lmstudio_panel.status_label.setText("Error: Could not connect to LM Studio (is it running?)")
         except requests.exceptions.HTTPError as e:
             logger.error(f"Model {model_id} not found or error: {e}")
-            self._set_status(f"Error: Model {model_id} not found in LM Studio")
+            if self._settings_panel and self._settings_panel.lmstudio_panel.status_label:
+                self._settings_panel.lmstudio_panel.status_label.setText(f"Error: Model {model_id} not found in LM Studio")
         except Exception as e:
             logger.error(f"Error selecting model in LM Studio: {e}")
-            self._set_status(f"Error selecting model: {e}")
+            if self._settings_panel and self._settings_panel.lmstudio_panel.status_label:
+                self._settings_panel.lmstudio_panel.status_label.setText(f"Error selecting model: {e}")
     
     def _fetch_lm_studio_current_model(self) -> None:
         """Fetch the currently loaded model from LM Studio."""
@@ -1391,10 +1837,12 @@ class ChatWindow(QtWidgets.QMainWindow):
     
     def _set_current_model(self, model_name: str) -> None:
         """Update the display of the currently loaded model."""
-        if self._settings_panel and self._settings_panel.current_model_label:
-            # Truncate long names for display
+        label = None
+        if self._settings_panel and self._settings_panel.cpp_panel:
+            label = self._settings_panel.cpp_panel.current_model_label
+        if label:
             display_name = model_name[-50:] if len(model_name) > 50 else model_name
-            self._settings_panel.current_model_label.setText(f"Model: {display_name}")
+            label.setText(f"Model: {display_name}")
             logger.debug(f"Updated current model display: {model_name}")
     
     def _set_status(self, message: str) -> None:
@@ -1455,13 +1903,35 @@ class ChatWindow(QtWidgets.QMainWindow):
         if not user_input:
             return
 
-        # Log the message being sent (especially important in automation mode)
-        logger.info(f"User message: {user_input}")
+        # Collect any image attachments from the chat panel (up to 3)
+        attachments: list[str] = []
+        if self._chat_panel and hasattr(self._chat_panel, "get_attachments"):
+            try:
+                attachments = self._chat_panel.get_attachments()  # type: ignore[attr-defined]
+            except Exception as e:
+                logger.debug(f"Could not get attachments: {e}")
+
+        # Log the message and attachments
+        if attachments:
+            logger.info(f"User message with {len(attachments)} image(s): {user_input}")
+            logger.info(f"Attachments: {attachments}")
+        else:
+            logger.info(f"User message: {user_input}")
 
         # Add user message to history and messages
         self._append_to_history(user_input, message_type="user")
-        self._messages.append({"role": "user", "content": user_input})
+        # Store attachments metadata alongside user message for future vision/tool use
+        user_entry: dict = {"role": "user", "content": user_input}
+        if attachments:
+            user_entry["images"] = attachments
+        self._messages.append(user_entry)
         self._prompt_input.clear()
+        # Clear attachments after sending
+        if self._chat_panel and hasattr(self._chat_panel, "clear_attachments"):
+            try:
+                self._chat_panel.clear_attachments()  # type: ignore[attr-defined]
+            except Exception as e:
+                logger.debug(f"Could not clear attachments: {e}")
 
         # Disable send button during response
         if self._send_btn:
@@ -1487,7 +1957,24 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._messages = ([system_msg] if system_msg else []) + recent_messages
             logger.info(f"Pruned history to {len(self._messages)} messages")
 
-        # Create and move worker to thread
+        # Fetch MCP tools and inject as text into system prompt
+        # Format matches LM Studio's approach: text-based tool list with [TOOL_REQUEST] markers
+        mcp_tools = self._fetch_mcp_tools()
+        if mcp_tools:
+            tool_prompt = self._build_tool_prompt(mcp_tools)
+            if tool_prompt:
+                # Inject into system message
+                if self._messages[0]["role"] == "system":
+                    self._messages[0]["content"] += tool_prompt
+                else:
+                    # Shouldn't happen, but handle gracefully
+                    logger.warning("First message is not system message, skipping tool injection")
+                logger.info(f"Injected {len(mcp_tools)} tools into system prompt")
+        
+        # Store MCP tools locally for later execution (no longer passing to model)
+        self._mcp_tools = mcp_tools
+
+        # Create and move worker to thread (no tools parameter)
         self._chat_worker = ChatWorker(self._model, self._messages)
         self._chat_thread = QtCore.QThread()
         self._chat_worker.moveToThread(self._chat_thread)
@@ -1499,20 +1986,131 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._chat_worker.error_occurred.connect(self._on_chat_error)
         self._chat_worker.usage_ready.connect(self._on_usage_ready)
 
+        # Create an immediate placeholder assistant bubble for streaming
+        self._append_to_history("", append_only=True, message_type="assistant")
+
         # Start thread
         self._chat_thread.started.connect(self._chat_worker.run)
         self._chat_thread.start()
+
+    def _run_model_with_tool_handling(self) -> str:
+        """Run model completion with automatic tool call detection and execution.
+        
+        This implements the multi-turn conversation loop:
+        1. Run model to get response
+        2. If response contains [TOOL_REQUEST], execute the tool
+        3. Append tool result in [TOOL_RESULT] tags
+        4. Run model again with result in conversation
+        5. Repeat until model stops requesting tools or hits safety limit
+        
+        Returns:
+            Final model response (after all tool calls executed)
+        """
+        MAX_TOOL_ITERATIONS = 5  # Prevent infinite loops
+        MAX_TOOL_CALLS_PER_ITERATION = 10  # Safety limit on calls per response
+        tool_iteration = 0
+        final_response = ""
+        
+        while tool_iteration < MAX_TOOL_ITERATIONS:
+            tool_iteration += 1
+            logger.info(f"Tool handling iteration {tool_iteration}/{MAX_TOOL_ITERATIONS}")
+            
+            # Wait for the current chat worker to finish and get response
+            if self._chat_thread:
+                self._chat_thread.quit()
+                self._chat_thread.wait()
+            
+            response = self._streaming_response.strip()
+            self._streaming_response = ""
+            
+            logger.debug(f"[Tool Loop] Iteration {tool_iteration}: Got response ({len(response)} chars)")
+            
+            if not response:
+                logger.warning(f"[Tool Loop] Empty response at iteration {tool_iteration}")
+                break
+            
+            # Add response to message history
+            self._messages.append({"role": "assistant", "content": response})
+            final_response = response
+            
+            # Parse for ALL tool requests in this response
+            tool_calls = []
+            remaining_text = response
+            
+            for _ in range(MAX_TOOL_CALLS_PER_ITERATION):
+                tool_request = self._parse_tool_request(remaining_text)
+                if not tool_request:
+                    break
+                    
+                tool_calls.append(tool_request)
+                logger.info(f"[Tool Loop] Found tool call: {tool_request[0]}")
+                
+                # Remove this tool request from remaining text (to find next one)
+                # This is a simple approach - could be improved
+                break  # For now, handle one tool at a time
+            
+            if not tool_calls:
+                logger.info(f"[Tool Loop] No tool requests in iteration {tool_iteration}, finishing")
+                break
+            
+            # Execute all detected tool calls
+            for tool_name, arguments in tool_calls:
+                logger.info(f"[Tool Loop] Executing: {tool_name}({arguments})")
+                tool_result = self._execute_tool_call(tool_name, arguments)
+                
+                if not tool_result:
+                    error_msg = f"Tool execution failed: {tool_name}"
+                    logger.error(f"[Tool Loop] {error_msg}")
+                    tool_result = f"[TOOL_RESULT]\\nError: {error_msg}\\n[END_TOOL_RESULT]"
+                else:
+                    # Result already has tags from _format_tool_result()
+                    if not tool_result.startswith("[TOOL_RESULT]"):
+                        tool_result = f"[TOOL_RESULT]\\n{tool_result}\\n[END_TOOL_RESULT]"
+                
+                # Append tool result to conversation for model to see
+                self._messages.append({"role": "user", "content": tool_result})
+                logger.info(f"[Tool Loop] Added tool result to conversation: {len(tool_result)} chars")
+            
+            # Run model again with tool results in context
+            logger.info(f"[Tool Loop] Re-running model with tool results...")
+            self._chat_worker = ChatWorker(self._model, self._messages)
+            self._chat_thread = QtCore.QThread()
+            self._chat_worker.moveToThread(self._chat_thread)
+            self._streaming_response = ""
+            
+            # Connect signals
+            self._chat_worker.chunk_ready.connect(self._on_chunk_ready)
+            self._chat_worker.finished.connect(self._on_chat_finished_tool_loop)
+            self._chat_worker.error_occurred.connect(self._on_chat_error)
+            self._chat_worker.usage_ready.connect(self._on_usage_ready)
+            
+            # Start and wait for completion
+            self._chat_thread.started.connect(self._chat_worker.run)
+            self._chat_thread.start()
+            
+            # Block until this iteration completes
+            # (We'll be called back via _on_chat_finished_tool_loop)
+            return None  # Signal that we're in a loop
+        
+        logger.info(f"[Tool Loop] Finished after {tool_iteration} iterations")
+        return final_response
+
+    def _on_chat_finished_tool_loop(self) -> None:
+        """Callback for chat completion within tool handling loop.
+        
+        Different from _on_chat_finished() as it doesn't show full UI updates
+        until the tool loop completes.
+        """
+        logger.debug("_on_chat_finished_tool_loop called")
+        # Just collect the response, continue the loop
+        # The main _on_chat_finished will handle display when loop is done
 
     def _on_chunk_ready(self, chunk: str) -> None:
         """Handle incoming chunk from the model."""
         # Collect chunks into a buffer
         self._streaming_response += chunk
-        # Show live streaming to user as plain text (no styling for streaming chunks)
-        if self._chat_panel and self._chat_panel.history_widget:
-            cursor = self._chat_panel.history_widget.textCursor()
-            cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
-            self._chat_panel.history_widget.setTextCursor(cursor)
-            self._chat_panel.history_widget.insertPlainText(chunk)
+        # Stream chunks directly into the current assistant bubble
+        self._append_to_history(chunk, append_only=True, message_type="assistant")
     
     def _on_usage_ready(self, usage: dict) -> None:
         """Handle token usage stats from the model."""
@@ -1520,67 +2118,128 @@ class ChatWindow(QtWidgets.QMainWindow):
         completion_tokens = usage.get("completion_tokens", 0)
         total_tokens = usage.get("total_tokens", 0)
         
-        # Store for status bar display
-        self._last_token_usage = {
-            "prompt": prompt_tokens,
-            "completion": completion_tokens,
-            "total": total_tokens
-        }
-        
+        if self._hwinfo_panel:
+            self._hwinfo_panel.update_token_usage(usage)
         logger.info(f"Token usage - Prompt: {prompt_tokens}, Completion: {completion_tokens}, Total: {total_tokens}")
 
     def _on_chat_finished(self) -> None:
-        """Handle chat completion."""
-        # The response has been streamed and displayed as plain text already
-        # Now we need to replace that plain text with a styled box version
+        """Handle chat completion with multi-turn tool handling.
+        
+        Implements the tool execution loop:
+        1. Get initial response from model
+        2. Check for [TOOL_REQUEST] blocks
+        3. If found, execute tool and add result to conversation
+        4. Re-run model with tool result in context
+        5. Repeat until no more tool requests or safety limit hit
+        6. Display final response
+        """
+        logger.debug("_on_chat_finished called")
         response = self._streaming_response.strip()
         self._streaming_response = ""  # Clear buffer
         
-        if response:
-            self._messages.append({"role": "assistant", "content": response})
-            logger.info(f"Assistant response: {response}")
+        logger.debug(f"Chat finished. Response length: {len(response)}, content: {response[:100] if response else '(empty)'}")
+        
+        if not response:
+            logger.warning("Empty response received from model")
+            print("\n" + "="*80 + "\nWARNING: Empty response from model\n" + "="*80 + "\n")
             
-            # Replace the streamed plain text with a styled box
-            if self._chat_panel and self._chat_panel.history_widget:
-                # Remove the plain text that was streamed
-                cursor = self._chat_panel.history_widget.textCursor()
-                cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
-                
-                # Select and delete the plain text response
-                # We need to find and delete the last response content
-                text = self._chat_panel.history_widget.toPlainText()
-                if text.endswith(response):
-                    # Move cursor to end, then select backwards by response length
-                    cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
-                    cursor.movePosition(QtGui.QTextCursor.MoveOperation.PreviousCharacter,
-                                       QtGui.QTextCursor.MoveMode.KeepAnchor,
-                                       len(response))
-                    cursor.removeSelectedText()
-                    self._chat_panel.history_widget.setTextCursor(cursor)
-                
-                # Now add the styled box version
-                self._append_to_history(response, message_type="assistant")
-
-        tool_request = self._parse_tool_request(response) if response else None
-
-        # Re-enable send button only when not chaining a tool call
-        if not tool_request and self._send_btn:
-            self._send_btn.setEnabled(True)
-            self._send_btn.setText("Send (Ctrl+Enter)")
-
-        # Cleanup thread
+            # Re-enable send button
+            if self._send_btn:
+                self._send_btn.setEnabled(True)
+                self._send_btn.setText("Send (Ctrl+Enter)")
+            
+            # Cleanup thread
+            if self._chat_thread:
+                self._chat_thread.quit()
+                self._chat_thread.wait()
+            
+            self.processing_message = False
+            return
+        
+        # Add initial response to message history
+        self._messages.append({"role": "assistant", "content": response})
+        logger.info(f"Assistant response: {response}")
+        print(f"\n{'='*80}\nFULL MODEL RESPONSE ({len(response)} chars):\n{'='*80}\n{response}\n{'='*80}\n")
+        # Finalize the current streaming bubble with this response
+        if self._chat_panel:
+            self._chat_panel.finalize_streaming_assistant(response)
+        
+        # Check for tool requests
+        tool_request = self._parse_tool_request(response)
+        
+        # Cleanup thread after initial response
         if self._chat_thread:
             self._chat_thread.quit()
             self._chat_thread.wait()
-
-        # If the model asked for a tool, execute it before moving on
+        
         if tool_request:
-            self._handle_tool_request(tool_request)
+            logger.info(f"TOOL REQUEST DETECTED: {tool_request}")
+            print(f"\n{'='*80}\nTOOL REQUEST DETECTED:\n  Tool: {tool_request[0]}\n  Args: {tool_request[1]}\n{'='*80}\n")
+            
+            # Update the current assistant bubble to show as tool_request
+            tool_name, arguments = tool_request
+            if self._chat_panel:
+                self._chat_panel.convert_assistant_to_tool_request(tool_name, arguments)
+            
+            # Execute tool and add result to conversation
+            logger.info(f"[Tool Execution] Executing: {tool_name}({arguments})")
+            
+            tool_result = self._execute_tool_call(tool_name, arguments)
+            if not tool_result:
+                error_msg = "Tool execution failed"
+                logger.error(f"[Tool Execution] {error_msg}: {tool_name}")
+                tool_result = f"[TOOL_RESULT]\\nError: {error_msg}\\n[END_TOOL_RESULT]"
+                self._append_to_history(f"Tool error: {tool_name}", message_type="error")
+            else:
+                # Result already has tags from _format_tool_result()
+                if not tool_result.startswith("[TOOL_RESULT]"):
+                    tool_result = f"[TOOL_RESULT]\\n{tool_result}\\n[END_TOOL_RESULT]"
+                
+                # Display tool response with tabular view
+                tool_response_data = {
+                    "name": tool_name,
+                    "arguments": arguments,
+                    "result": tool_result
+                }
+                self._append_to_history("", message_type="tool_response", tool_response=tool_response_data)
+            
+            # Append tool result to conversation
+            self._messages.append({"role": "user", "content": tool_result})
+            logger.info(f"[Tool Execution] Added result to conversation: {len(tool_result)} chars")
+            
+            # Re-run model with tool result in context
+            logger.info("[Tool Execution] Re-running model with tool result...")
+            self._chat_worker = ChatWorker(self._model, self._messages)
+            self._chat_thread = QtCore.QThread()
+            self._chat_worker.moveToThread(self._chat_thread)
+            self._streaming_response = ""
+            
+            # Connect signals (using same _on_chat_finished for recursive calls)
+            self._chat_worker.chunk_ready.connect(self._on_chunk_ready)
+            self._chat_worker.finished.connect(self._on_chat_finished)
+            self._chat_worker.error_occurred.connect(self._on_chat_error)
+            self._chat_worker.usage_ready.connect(self._on_usage_ready)
+            
+            # Start thread and return (will call _on_chat_finished recursively)
+            # Create a new placeholder bubble for the next streamed assistant response
+            self._append_to_history("", append_only=True, message_type="assistant")
+            self._chat_thread.started.connect(self._chat_worker.run)
+            self._chat_thread.start()
             return
-
+        
+        # No tool request, show the response and finish
+        logger.debug("No tool request found in response")
+        
+        # Re-enable send button
+        if self._send_btn:
+            self._send_btn.setEnabled(True)
+            self._send_btn.setText("Send (Ctrl+Enter)")
+        
         # In automation mode, process next message after a brief delay
         self.processing_message = False
+        logger.debug(f"[AUTOMATION] Finished processing, automation_mode={self.automation_mode}, pending={len(self.pending_messages) if self.pending_messages else 0}")
         if self.automation_mode and self.pending_messages:
+            logger.debug("[AUTOMATION] Scheduling next message in 1000ms")
             QtCore.QTimer.singleShot(1000, self._process_next_automation_message)
 
     def _on_chat_error(self, error: str) -> None:
@@ -1605,16 +2264,17 @@ class ChatWindow(QtWidgets.QMainWindow):
             logger.error(f"Exiting automation mode due to error: {error}")
             QtCore.QTimer.singleShot(1000, self.close)
 
-    def _append_to_history(self, text: str, append_only: bool = False, message_type: str = "system") -> None:
+    def _append_to_history(self, text: str, append_only: bool = False, message_type: str = "system", tool_response: Optional[dict] = None) -> None:
         """Append text to the history widget.
         
         Args:
             text: Text to append
             append_only: If True, append without styling (for streaming)
-            message_type: Type of message - user, assistant, system, tool, error
+            message_type: Type of message - user, assistant, system, tool, tool_response, error
+            tool_response: Optional dict with tool response data (name, arguments, result)
         """
         if self._chat_panel:
-            self._chat_panel.append_to_history(text, append_only, message_type)
+            self._chat_panel.append_to_history(text, append_only, message_type, tool_response)
 
     def _load_input_file(self, file_path: str) -> list[dict]:
         """Load messages from a file. Each line is a message, special marker 'EXIT' triggers shutdown."""
@@ -1679,57 +2339,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         """Schedule application shutdown after a brief delay to ensure logs are flushed."""
         QtCore.QTimer.singleShot(2000, self.close)
 
-    def _start_gpu_monitoring(self) -> None:
-        """Start polling GPU stats every second."""
-        try:
-            import GPUtil
-            self._gpu_timer = QtCore.QTimer()
-            self._gpu_timer.timeout.connect(self._update_gpu_stats)
-            self._gpu_timer.start(1000)  # Poll every second
-            logger.debug("GPU monitoring started")
-        except ImportError:
-            logger.debug("GPUtil not available; GPU monitoring disabled")
-    
-    def _update_gpu_stats(self) -> None:
-        """Poll GPU and update status bar with rolling average."""
-        try:
-            import GPUtil
-            gpus = GPUtil.getGPUs()
-            if not gpus:
-                return
-            
-            gpu = gpus[0]
-            vram_used = gpu.memoryUsed  # MB
-            utilization = gpu.load * 100  # Percent
-            
-            # Only add non-zero readings
-            if vram_used > 0 or utilization > 0:
-                self._gpu_samples.append((vram_used, utilization))
-                # Keep only last 10 samples
-                if len(self._gpu_samples) > 10:
-                    self._gpu_samples.pop(0)
-            
-            # Calculate averages from non-zero samples
-            if self._gpu_samples:
-                avg_vram = sum(s[0] for s in self._gpu_samples) / len(self._gpu_samples)
-                avg_util = sum(s[1] for s in self._gpu_samples) / len(self._gpu_samples)
-                status_msg = f"GPU: {avg_vram:.0f} MB VRAM | {avg_util:.1f}% Util"
-                
-                # Append token usage if available
-                if self._last_token_usage:
-                    prompt = self._last_token_usage.get("prompt", 0)
-                    completion = self._last_token_usage.get("completion", 0)
-                    total = self._last_token_usage.get("total", 0)
-                    status_msg += f" | Tokens: {total} ({prompt}+{completion})"
-                
-                self.statusBar().showMessage(status_msg)
-        except Exception as e:
-            logger.debug(f"GPU stats update failed: {e}")
     
     def closeEvent(self, event):
         """Handle window close, ensuring proper cleanup."""
-        if self._gpu_timer:
-            self._gpu_timer.stop()
+        if self._hwinfo_panel:
+            self._hwinfo_panel.stop_monitoring()
         
         if self._chat_thread and self._chat_thread.isRunning():
             self._chat_thread.quit()
@@ -1772,7 +2386,8 @@ def main() -> None:
     parser.add_argument(
         '--model',
         type=str,
-        help='Model to load on startup (e.g., "mradermacher/Huihui-LFM2-2.6B-Exp-abliterated-GGUF")'
+        help='Model to load on startup. Can be a relative path (e.g., "mradermacher/Huihui-LFM2-2.6B-Exp-abliterated-GGUF") '
+             'or a full file path to a GGUF file (e.g., "D:\\LLM Models\\mradermacher\\gemma-3-27b-it...\\model.gguf")'
     )
     args = parser.parse_args()
     

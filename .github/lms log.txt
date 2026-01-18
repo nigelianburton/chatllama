@@ -1,0 +1,93 @@
+timestamp: 1/18/2026, 7:20:15 AM
+type: llm.prediction.input
+modelIdentifier: gemma-3n-e4b-it-abliterated-i1:2
+modelPath: mradermacher/gemma-3n-E4B-it-abliterated-i1-GGUF/gemma-3n-E4B-it-abliterated.i1-Q4_K_S.gguf
+input:
+<start_of_turn>user
+The following tools are available for you to use:
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "get_fashion_look",
+      "description": "Get a hot woman's fashion trend for 2026, randomly selected.\n\nThese are the most anticipated fashion trends that will be hot in 2026.\nReturns a complete outfit inspiration with name, description, key items, colors, and vibe.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_all_looks",
+      "description": "Get all hot fashion trends for 2026.\n\nReturns a complete list of the hottest anticipated fashion looks for 2026.\nThese are the trends expected to dominate the fashion scene.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_look_by_vibe",
+      "description": "Get a hot 2026 fashion trend that matches a specific vibe/mood.\n\nArgs:\n    vibe: The desired vibe (e.g., 'bold', 'sophisticated', 'romantic', 'modern')\n\nReturns:\n    A hot 2026 fashion trend matching or similar to the requested vibe.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "vibe": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "vibe"
+        ]
+      }
+    }
+  }
+]
+You can call available tools using this exact format:
+[TOOL_REQUEST]
+{"name": "tool_name", "arguments": {"param":"value"}}
+[END_TOOL_REQUEST]
+
+Examples:
+User: "Check Paris weather"
+[TOOL_REQUEST]
+{"name": "get_weather", "arguments": {"location":"Paris"}}
+[END_TOOL_REQUEST]
+
+User: "Email John and open browser"
+[TOOL_REQUEST]
+{"name": "send_email", "arguments": {"to":"John","subject":"meeting"}}
+[END_TOOL_REQUEST]
+[TOOL_REQUEST]
+{"name": "open_browser", "arguments": {}}
+[END_TOOL_REQUEST]
+
+The results of tool calls will be provided in the following format:
+[TOOL_RESULT]
+<result>
+[END_TOOL_RESULT]
+
+Rules:
+- Only use listed tools
+- Include all required arguments
+- One tool per block
+- If calling tools, end with tool calls (no text after)
+- Use tool results to inform your response
+- Never output [TOOL_RESULT] or [END_TOOL_RESULT] tags yourself.
+- Answer normally if no tools are needed.
+
+hi
+
+what is a good 2026 fashion look. List only one.<end_of_turn>
+<start_of_turn>model
+[TOOL_REQUEST]
+{"name": "get_fashion_look", "arguments": {}}
+[END_TOOL_REQUEST]<end_of_turn>
+<start_of_turn>user
+[TOOL_RESULT][{"type":"text","text":"{\"success\":true,\"look\":{\"name\":\"Cyberpunk Glam\",\"description\":\"Holographic and metallic accents paired with sleek silhouettes.\",\"key_items\":[\"metallic bodysuit\",\"oversized translucent trench coat\",\"chrome platform boots\",\"geometric sunglasses\"],\"color_palette\":[\"silver\",\"holographic\",\"neon accents\"],\"vibe\":\"Futuristic, bold, confident\"},\"styling_tip\":\"Cyberpunk Glam is trending big in 2026! Pair these items with confidence and your personal flair!\",\"total_looks_available\":8}"}][END_TOOL_RESULT]<end_of_turn>
+<start_of_turn>model
+

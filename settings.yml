@@ -6,24 +6,55 @@ gpu_offload_layers: 99
 mcp_server_enabled: true
 mcp_server_command: python test_mcp/fashion_server/server.py
 tool_integration_enabled: true
-tool_preamble: 'You have access to specialized tools that extend your capabilities.
+tool_preamble: |
+  The following tools are available for you to use:
+  {tools_json}
+  You can call available tools using this exact format:
+  [TOOL_REQUEST]
+  {"name": "tool_name", "arguments": {"param":"value"}}
+  [END_TOOL_REQUEST]
+
+  Examples:
+  User: "Check Paris weather"
+  [TOOL_REQUEST]
+  {"name": "get_weather", "arguments": {"location":"Paris"}}
+  [END_TOOL_REQUEST]
+
+  User: "Email John and open browser"
+  [TOOL_REQUEST]
+  {"name": "send_email", "arguments": {"to":"John","subject":"meeting"}}
+  [END_TOOL_REQUEST]
+  [TOOL_REQUEST]
+  {"name": "open_browser", "arguments": {}}
+  [END_TOOL_REQUEST]
+
+  The results of tool calls will be provided in the following format:
+  [TOOL_RESULT]
+  <result>
+  [END_TOOL_RESULT]
+
+  Rules:
+  - Only use listed tools
+  - Include all required arguments
+  - One tool per block
+  - If calling tools, end with tool calls (no text after)
+  - Use tool results to inform your response
+  - Never output [TOOL_RESULT] or [END_TOOL_RESULT] tags yourself.
+  - Answer normally if no tools are needed.
+
+# MCP Server Configurations
+mcp_servers:
+  - name: fashion-server
+    command: python
+    args: test_mcp/fashion_server/server.py
+  - name: fashion-stdio
+    command: python
+    args: test_mcp/fashion_stdio.py
+  - name: lm-studio-server
+    command: python
+    args: test_mcp/lm_studio_server.py
 
 
-  Tools Available:
-
-  {tools_list}
-
-
-  When a user request requires using a tool, you can suggest using it.
-
-  Include the tool name and required parameters in your response.
-
-  Format: TOOL: [tool_name] with [param1=value1, param2=value2, ...]
-
-
-  Use tools proactively when they would enhance your response to the user.
-
-  '
 model_capabilities:
   test/model-1:
     has_vision: true

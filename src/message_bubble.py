@@ -1,0 +1,423 @@
+import logging
+from typing import Optional
+from PyQt6 import QtCore, QtGui, QtWidgets
+import markdown
+import json
+
+logger = logging.getLogger(__name__)
+
+# Color scheme for different message types
+MESSAGE_COLORS = {
+    "instruction": "#e3f2fd",      # Light blue
+    "reply": "#f3e5f5",            # Light purple
+    "thinking": "#fff3e0",         # Light orange
+    "tool_request": "#e8f5e9",     # Light green
+    "tool_response": "#fce4ec",    # Light pink
+    "system": "#f5f5f5",           # Light gray
+    "user": "#e3f2fd",             # Light blue (same as instruction)
+    "assistant": "#f3e5f5",         # Light purple (same as reply)
+    "tool": "#e8f5e9",             # Light green (same as tool_request)
+    "error": "#ffebee",            # Light red
+}
+
+
+# Content widget classes for different bubble types
+class UserInstructionContent(QtWidgets.QFrame):
+    """Display user instruction as plain text."""
+    
+    def __init__(self, text: str, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        layout = QtWidgets.QVBoxLayout()
+        layout.setContentsMargins(1, 1, 1, 1)
+        layout.setSpacing(0)
+        
+        label = QtWidgets.QLabel(text)
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        label.setStyleSheet("color: #000000; font-size: 11px; background-color: transparent;")
+        label.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
+        label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.MinimumExpanding)
+        
+        layout.addWidget(label, 1)
+        self.setLayout(layout)
+
+
+class UserInstructionWithAttachmentsContent(QtWidgets.QFrame):
+    """Display user instruction with image attachments (thumbnails on right)."""
+    
+    def __init__(self, text: str, image_paths: list[str], parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        layout = QtWidgets.QHBoxLayout()
+        layout.setContentsMargins(1, 1, 1, 1)
+        layout.setSpacing(3)
+        
+        # Text on left
+        text_label = QtWidgets.QLabel(text)
+        text_label.setWordWrap(True)
+        text_label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        text_label.setStyleSheet("color: #000000; font-size: 11px; background-color: transparent;")
+        text_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
+        text_label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.MinimumExpanding)
+        layout.addWidget(text_label, 1)
+        
+        # Thumbnails on right (stack vertically)
+        thumb_layout = QtWidgets.QVBoxLayout()
+        thumb_layout.setSpacing(3)
+        for image_path in image_paths[:3]:  # Max 3 images
+            thumb = QtWidgets.QLabel()
+            pixmap = QtGui.QPixmap(image_path)
+            if not pixmap.isNull():
+                scaled = pixmap.scaledToHeight(60, QtCore.Qt.TransformationMode.SmoothTransformation)
+                thumb.setPixmap(scaled)
+                thumb.setStyleSheet("border: 1px solid #888888;")
+            else:
+                thumb.setText("[Image\nNot Found]")
+                thumb.setStyleSheet("color: #ff0000; background-color: #cccccc; border: 1px solid #888888;")
+            thumb.setFixedSize(60, 60)
+            thumb_layout.addWidget(thumb)
+        thumb_layout.addStretch()
+        layout.addLayout(thumb_layout, 0)
+        
+        self.setLayout(layout)
+
+
+class ToolRequestContent(QtWidgets.QFrame):
+    """Display tool request with name/description on left and arguments table on right."""
+    
+    def __init__(self, tool_name: str, arguments: dict, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        layout = QtWidgets.QHBoxLayout()
+        layout.setContentsMargins(1, 1, 1, 1)
+        layout.setSpacing(3)
+        
+        # Text on left (50%)
+        text_label = QtWidgets.QLabel(f"Tool: {tool_name}")
+        text_label.setWordWrap(True)
+        text_label.setStyleSheet("color: #000000; font-size: 11px; font-weight: bold; background-color: transparent;")
+        text_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
+        text_label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.MinimumExpanding)
+        layout.addWidget(text_label, 1)
+        
+        # Arguments table on right (50%)
+        table_widget = QtWidgets.QWidget()
+        table_layout = QtWidgets.QGridLayout()
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.setSpacing(2)
+        
+        if arguments:
+            table_layout.addWidget(self._create_label("Arguments:", bold=True), 0, 0, 1, 2)
+            row = 1
+            for arg_name, arg_value in arguments.items():
+                table_layout.addWidget(self._create_label(str(arg_name), bold=True), row, 0)
+                table_layout.addWidget(self._create_label(str(arg_value)), row, 1)
+                row += 1
+            table_layout.addItem(QtWidgets.QSpacerItem(0, 0, QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Expanding), row, 0)
+        
+        table_widget.setLayout(table_layout)
+        table_widget.setStyleSheet("background-color: rgba(255, 255, 255, 0.3); border: 1px solid #888888; border-radius: 4px;")
+        layout.addWidget(table_widget, 1)
+        
+        self.setLayout(layout)
+    
+    def _create_label(self, text: str, bold: bool = False) -> QtWidgets.QLabel:
+        label = QtWidgets.QLabel(text)
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        font_weight = "bold" if bold else "normal"
+        label.setStyleSheet(f"color: #000000; font-size: 10px; font-weight: {font_weight}; background-color: transparent;")
+        return label
+
+
+class AssistantContent(QtWidgets.QFrame):
+    """Display assistant message with markdown rendering and live streaming support."""
+    
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        layout = QtWidgets.QVBoxLayout()
+        layout.setContentsMargins(1, 1, 1, 1)
+        layout.setSpacing(0)
+        
+        self.text_browser = QtWidgets.QTextBrowser()
+        self.text_browser.setOpenExternalLinks(True)
+        self.text_browser.setReadOnly(True)
+        self.text_browser.setStyleSheet("""
+            QTextBrowser {
+                color: #000000;
+                font-size: 11px;
+                background-color: transparent;
+                border: none;
+            }
+        """)
+        self.text_browser.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.MinimumExpanding)
+        
+        self.set_text(text)
+        layout.addWidget(self.text_browser, 1)
+        self.setLayout(layout)
+    
+    def set_text(self, text: str) -> None:
+        """Set and render markdown text."""
+        if text:
+            html = markdown.markdown(text, extensions=['fenced_code', 'codehilite', 'tables', 'nl2br'])
+            self.text_browser.setHtml(html)
+        else:
+            self.text_browser.setHtml("")
+    
+    def append_text(self, chunk: str) -> None:
+        """Append streamed text chunk (plain text, rendered on finalize)."""
+        cursor = self.text_browser.textCursor()
+        cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+        cursor.insertText(chunk)
+        self.text_browser.setTextCursor(cursor)
+        self.text_browser.ensureCursorVisible()
+
+
+class ToolRequestContent(QtWidgets.QFrame):
+    """Display tool request with name/description on left and arguments table on right."""
+    
+    def __init__(self, tool_name: str, arguments: dict, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        layout = QtWidgets.QHBoxLayout()
+        layout.setContentsMargins(1, 1, 1, 1)
+        layout.setSpacing(3)
+        
+        # Text on left (50%)
+        text_label = QtWidgets.QLabel(f"Tool: {tool_name}")
+        text_label.setWordWrap(True)
+        text_label.setStyleSheet("color: #000000; font-size: 11px; font-weight: bold; background-color: transparent;")
+        text_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
+        text_label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.MinimumExpanding)
+        layout.addWidget(text_label, 1)
+        
+        # Arguments table on right (50%)
+        table_widget = QtWidgets.QWidget()
+        table_layout = QtWidgets.QGridLayout()
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.setSpacing(2)
+        
+        if arguments:
+            table_layout.addWidget(self._create_label("Arguments:", bold=True), 0, 0, 1, 2)
+            row = 1
+            for arg_name, arg_value in arguments.items():
+                table_layout.addWidget(self._create_label(str(arg_name), bold=True), row, 0)
+                table_layout.addWidget(self._create_label(str(arg_value)), row, 1)
+                row += 1
+            table_layout.addItem(QtWidgets.QSpacerItem(0, 0, QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Expanding), row, 0)
+        
+        table_widget.setLayout(table_layout)
+        table_widget.setStyleSheet("background-color: rgba(255, 255, 255, 0.3); border: 1px solid #888888; border-radius: 4px;")
+        layout.addWidget(table_widget, 1)
+        
+        self.setLayout(layout)
+    
+    def _create_label(self, text: str, bold: bool = False) -> QtWidgets.QLabel:
+        label = QtWidgets.QLabel(text)
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
+        font_weight = "bold" if bold else "normal"
+        label.setStyleSheet(f"color: #000000; font-size: 10px; font-weight: {font_weight}; background-color: transparent;")
+        return label
+
+
+class ToolResponseContent(QtWidgets.QFrame):
+    """Display tool response as formatted JSON in a white text box."""
+    
+    def __init__(self, tool_name: str, response_data: dict, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        layout = QtWidgets.QVBoxLayout()
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(3)
+        
+        # Header (no border)
+        header = QtWidgets.QLabel(f"Tool Response: {tool_name}")
+        header.setStyleSheet("color: #000000; font-size: 12px; font-weight: bold; background-color: transparent;")
+        layout.addWidget(header)
+        
+        # Parse response (assume it's already a dict or JSON string)
+        if isinstance(response_data, str):
+            try:
+                # Try to strip wrapper tags first
+                cleaned = response_data
+                if cleaned.startswith("[TOOL_RESULT]"):
+                    cleaned = cleaned.replace("[TOOL_RESULT]", "", 1)
+                if cleaned.endswith("[END_TOOL_RESULT]"):
+                    cleaned = cleaned[:-len("[END_TOOL_RESULT]")]
+                cleaned = cleaned.strip()
+                
+                data = json.loads(cleaned)
+            except json.JSONDecodeError:
+                # If not JSON, display as plain text
+                data = response_data
+        else:
+            data = response_data
+        
+        # Format JSON for display
+        if isinstance(data, dict):
+            json_text = json.dumps(data, indent=2)
+        else:
+            json_text = str(data)
+        
+        # Create white text box for JSON response
+        text_box = QtWidgets.QPlainTextEdit()
+        text_box.setPlainText(json_text)
+        text_box.setReadOnly(True)
+        text_box.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
+        text_box.setStyleSheet("""
+            QPlainTextEdit {
+                color: #000000;
+                font-size: 10px;
+                font-family: 'Courier New', monospace;
+                background-color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 4px;
+                margin: 0px;
+            }
+        """)
+        text_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.MinimumExpanding)
+        layout.addWidget(text_box, 1)
+        
+        self.setLayout(layout)
+
+
+class MessageBubble(QtWidgets.QFrame):
+    """Message bubble container with rounded edges, selection state, and type overlay.
+    
+    Contains a rounded rectangle frame with configurable background color, optional
+    red border when selected, and a type label overlay at top-left.
+    
+    Content widgets (user instruction, tool request, tool response, etc.) are placed
+    inside the rounded frame.
+    """
+
+    def __init__(self, msg_type: str = "system", content_widget: Optional[QtWidgets.QWidget] = None, parent=None):
+        super().__init__(parent)
+        self.msg_type = msg_type
+        self.is_selected = False
+        
+        # Normalize message type
+        type_map = {
+            "instruction": "instruction",
+            "user": "instruction",
+            "reply": "reply",
+            "assistant": "reply",
+            "thinking": "thinking",
+            "tool_request": "tool_request",
+            "tool": "tool_request",
+            "tool_response": "tool_response",
+            "system": "system",
+            "error": "error",
+        }
+        self.display_type = type_map.get(msg_type.lower(), "system")
+
+        # Root container with margin for inset effect (3px)
+        root_layout = QtWidgets.QVBoxLayout()
+        root_layout.setContentsMargins(3, 3, 3, 3)
+        root_layout.setSpacing(0)
+        self.setLayout(root_layout)
+
+        # Inner rounded visual frame
+        self.rounded_frame = QtWidgets.QFrame(self)
+        self.rounded_frame.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        self.rounded_frame.setFrameShadow(QtWidgets.QFrame.Shadow.Plain)
+        self.rounded_frame.setLineWidth(1)
+        self.rounded_frame.setMinimumHeight(80)
+        self.rounded_frame.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.MinimumExpanding)
+
+        bg_color = MESSAGE_COLORS.get(self.display_type, MESSAGE_COLORS["system"])
+        self._update_frame_style(bg_color)
+
+        # Content layout inside the rounded frame
+        frame_layout = QtWidgets.QVBoxLayout()
+        frame_layout.setContentsMargins(0, 0, 0, 0)
+        frame_layout.setSpacing(0)
+        
+        if content_widget:
+            frame_layout.addWidget(content_widget, 1)
+        
+        self.rounded_frame.setLayout(frame_layout)
+        root_layout.addWidget(self.rounded_frame)
+
+        # Type overlay label (positioned absolutely at top-left)
+        self.type_overlay = QtWidgets.QLabel(self)
+        self.type_overlay.setText(self.display_type.upper())
+        self.type_overlay.setStyleSheet(
+            "color: #666666; font-size: 9px; font-weight: bold; background-color: transparent;"
+        )
+        self.type_overlay.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
+        self.type_overlay.adjustSize()
+        self.type_overlay.move(4, 4)
+        self.type_overlay.raise_()
+    
+    def _update_frame_style(self, bg_color: str) -> None:
+        """Update the rounded frame background and border style."""
+        border_color = "#ff0000" if self.is_selected else "#888888"
+        border_width = "2px" if self.is_selected else "1px"
+        self.rounded_frame.setStyleSheet(
+            f"""
+            QFrame {{
+                background-color: {bg_color};
+                border: {border_width} solid {border_color};
+                border-radius: 8px;
+            }}
+            """
+        )
+    
+    def set_selected(self, selected: bool) -> None:
+        """Set the selected state; border becomes red when selected."""
+        self.is_selected = selected
+        bg_color = MESSAGE_COLORS.get(self.display_type, MESSAGE_COLORS["system"])
+        self._update_frame_style(bg_color)
+    
+    def set_content_widget(self, content_widget: QtWidgets.QWidget) -> None:
+        """Replace or set the content widget inside the bubble."""
+        layout = self.rounded_frame.layout()
+        if layout is None:
+            layout = QtWidgets.QVBoxLayout()
+            layout.setContentsMargins(0, 0, 0, 0)
+            self.rounded_frame.setLayout(layout)
+        
+        # Clear existing widgets
+        while layout.count() > 0:
+            item = layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
+        # Add new content widget
+        layout.addWidget(content_widget, 1)
+    
+    def append_stream_text(self, chunk: str) -> None:
+        """Delegate to content widget's append_text method (for streaming)."""
+        layout = self.rounded_frame.layout()
+        if layout and layout.count() > 0:
+            content_widget = layout.itemAt(0).widget()
+            if content_widget and hasattr(content_widget, 'append_text'):
+                content_widget.append_text(chunk)
+    
+    def sizeHint(self) -> QtCore.QSize:
+        """Return appropriate size for the widget with min/max height constraints.
+        
+        Min height: 32px, Max height: 92px
+        Height grows/shrinks based on content.
+        """
+        MIN_HEIGHT = 32
+        MAX_HEIGHT = 92
+        
+        # Get content widget's size hint
+        layout = self.rounded_frame.layout()
+        if layout and layout.count() > 0:
+            content_widget = layout.itemAt(0).widget()
+            if content_widget:
+                content_hint = content_widget.sizeHint()
+                # Use content's desired height, but constrain between min/max
+                desired_height = content_hint.height() + 10  # Add padding
+                constrained_height = max(MIN_HEIGHT, min(MAX_HEIGHT, desired_height))
+                return QtCore.QSize(380, constrained_height)
+        
+        # Default size with constraints
+        return QtCore.QSize(380, MIN_HEIGHT)

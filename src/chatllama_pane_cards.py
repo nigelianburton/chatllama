@@ -17,6 +17,5 @@ class CardsPanel(QtWidgets.QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
-        layout.addWidget(QtWidgets.QLabel("Cards"))
         layout.addStretch(1)
         self.setLayout(layout)

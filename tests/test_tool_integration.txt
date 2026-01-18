@@ -1,0 +1,5 @@
+# Test file for LM Studio protocol tool integration
+# Tests the new [TOOL_REQUEST] format with multi-turn handling
+
+What is a good 2026 fashion look? List only one.
+EXIT
