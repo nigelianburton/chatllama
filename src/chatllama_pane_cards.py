@@ -1,12 +1,12 @@
 import logging
 from PyQt6 import QtCore, QtWidgets
-from cards.card_chrome import CardChrome
+from cards.card_svg import CardSVG
 
 logger = logging.getLogger(__name__)
 
 
 class CardsPanel(QtWidgets.QWidget):
-    """Cards panel widget displaying card templates with embedded browser."""
+    """Cards panel widget displaying SVG content via QtSvg."""
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -30,14 +30,14 @@ class CardsPanel(QtWidgets.QWidget):
         scroll_layout.setContentsMargins(8, 8, 8, 8)
         scroll_layout.setSpacing(12)
 
-        # Instantiate CardChrome with initial content (placeholder image)
-        logger.info("Creating CardChrome widget for SVG display")
-        self._card_chrome = CardChrome(
+        # Instantiate CardSVG with initial content (placeholder image)
+        logger.info("Creating CardSVG widget for SVG display")
+        self._card_svg = CardSVG(
             parent=scroll_container,
-            start_url=r"T:\pic1.JPG"
+            start_content=r"T:\pic1.JPG"
         )
-        logger.info(f"CardChrome created: size={self._card_chrome.size()}, minimumHeight={self._card_chrome.minimumHeight()}")
-        scroll_layout.addWidget(self._card_chrome)
+        logger.info(f"CardSVG created: size={self._card_svg.size()}, minimumHeight={self._card_svg.minimumHeight()}")
+        scroll_layout.addWidget(self._card_svg)
         scroll_layout.addStretch(1)
 
         scroll_area.setWidget(scroll_container)
@@ -50,8 +50,8 @@ class CardsPanel(QtWidgets.QWidget):
         try:
             if not svg_markup:
                 return
-            if hasattr(self, "_card_chrome") and self._card_chrome:
-                self._card_chrome.load_svg_content(svg_markup)
+            if hasattr(self, "_card_svg") and self._card_svg:
+                self._card_svg.load_svg_content(svg_markup)
                 logger.info("CardsPanel: SVG rendered in card widget")
         except Exception as e:
             logger.error(f"CardsPanel.display_svg failed: {e}")

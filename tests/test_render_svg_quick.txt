@@ -1,0 +1,6 @@
+# Quick test for SVG rendering
+# This should trigger: create_artboard -> get_fashion_look -> render_svg
+
+Create a simple spring fashion magazine cover with a small SVG design. Use create_artboard for landscape mode, then render_svg with a small SVG (just a simple colored rectangle).
+
+EXIT

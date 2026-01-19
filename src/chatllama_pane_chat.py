@@ -373,6 +373,10 @@ class ChatPanel(QtWidgets.QWidget):
         # Set text content
         if text:
             bubble.set_text(text)
+
+        # Attach thumbnails for user messages when provided
+        if image_paths:
+            bubble.set_images(image_paths)
         
         bubble.show()
         
@@ -398,7 +402,7 @@ class ChatPanel(QtWidgets.QWidget):
         
         return (bubble, item)
     
-    def append_to_history(self, text: str, append_only: bool = False, message_type: str = "system", tool_response: Optional[dict] = None) -> None:
+    def append_to_history(self, text: str, append_only: bool = False, message_type: str = "system", tool_response: Optional[dict] = None, image_paths: Optional[list[str]] = None) -> None:
         """Append text to history widget as a message bubble.
         
         Args:
@@ -406,8 +410,8 @@ class ChatPanel(QtWidgets.QWidget):
             append_only: Ignored for QListWidget (always creates a new bubble)
             message_type: Type of message - "user", "assistant", "system", "tool", "error", "thinking", "tool_request", "tool_response"
             tool_response: Optional dict with tool response data (name, arguments, result)
+            image_paths: Optional list of attachment file paths to show as thumbnails
         """
-        logger.info(f"[ChatPanel Append] Called with message_type={message_type}, self={id(self)}, history_widget={self.history_widget}")
         if self.history_widget is None:
             logger.warning("History widget is None!")
             return
@@ -429,7 +433,7 @@ class ChatPanel(QtWidgets.QWidget):
             return
 
         # Non-streaming path: create a new bubble
-        self._create_message_bubble(text, message_type, tool_response=tool_response)
+        self._create_message_bubble(text, message_type, image_paths=image_paths, tool_response=tool_response)
         
         # Scroll to bottom
         self.history_widget.scrollToBottom()

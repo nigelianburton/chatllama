@@ -1,5 +1,7 @@
 # ChatLlama - Copilot Instructions
 
+**Environment mandate:** Always run commands inside the `chatllama` conda environment (`conda activate chatllama`) before executing Python or scripts.
+
 ChatLlama is a PyQt6-based chat interface for local LLMs with agent/MCP support.
 
 ## Project Goals
@@ -169,19 +171,30 @@ Adaptive message display with three layout modes:
 
 ### TODO 📋
 
-#### Current Work: MCP Tool Integration & Execution
+#### Current Work: Logging Improvements - Stage 1 COMPLETED ✅
 
-**Issue**: MCP stdio TaskGroup error prevents tools/list from returning; tools still not injected
-- Import path fixed (uses stdio_client + StdioServerParameters)
-- Tool execution pipeline implemented (parse TOOL:, call MCP, stream result), but blocked by fetch failure
-- Need to surface inner TaskGroup exception and make fetch reliable
+**Achievement**: Reduced log file from **2,450 → 565 lines (77% reduction)**
 
-**Priority Tasks** (in order, test before continuing):
-1. [x] **Fix MCP Client Import** - Updated StdioClientTransport to use stdio_client() + StdioServerParameters (current MCP API)
-2. [x] **Improve Error Handling** - Log errors and exit gracefully in automation mode (context limit, OOM, etc.) - COMPLETED
-3. [ ] **Fix MCP Async Error** - TaskGroup error when calling tools/list via stdio; need to capture inner stack and resolve
-4. [x] **Implement Tool Execution** - Parse model "TOOL: [name]" output, execute via MCP, feed results back
-5. [ ] **Native Tool Format Support** - Format tools for model-specific calling (Qwen JSON, Nemotron render_extra_keys, etc.)
+**Stage 1 Completed Features**:
+- ✅ Added TRACE log level (below DEBUG) for protocol traffic
+- ✅ LLM streaming metrics with timing (first token latency, chars/sec, total time)
+- ✅ Visual markers (►►►, ◄◄◄) for grep-friendly navigation
+- ✅ Component prefixes ([LLM], [TOOL], [MCP], [UI]) for filtering
+- ✅ Tool execution blocks with ═══ boundaries and timing
+- ✅ Consolidated chunk logging (every 10th chunk at DEBUG, not all)
+
+**Stage 2 Plan** (see `docs/LOGGING_STAGE2_PLAN.md`):
+- Target: 565 → 250 lines (90% total reduction from original 2,450)
+- Focus: Per-token UI updates (-100 lines), system prompt deduplication (-50 lines), UI init cleanup (-35 lines)
+- Remaining issues: ChatPanel append spam, tool definition JSON verbosity, card widget logs
+
+**MCP Tool Integration Status**:
+- [x] **Fix MCP Client Import** - Updated StdioClientTransport to use stdio_client() + StdioServerParameters (current MCP API)
+- [x] **Improve Error Handling** - Log errors and exit gracefully in automation mode (context limit, OOM, etc.)
+- [x] **Implement Tool Execution** - Parse model "TOOL: [name]" output, execute via MCP, feed results back
+- [x] **Tool Logging** - Consolidated with visual markers and timing
+- [ ] **Fix MCP Async Error** - TaskGroup error when calling tools/list via stdio; need to capture inner stack and resolve
+- [ ] **Native Tool Format Support** - Format tools for model-specific calling (Qwen JSON, Nemotron render_extra_keys, etc.)
 
 #### Future Work
 - [ ] Agent mode toggle
@@ -239,6 +252,42 @@ Example `test_input.txt`:
 Hello, what is Python?
 Explain machine learning briefly
 EXIT
+```
+
+### Screenshot Capture
+
+**Automatic UI Screenshots**: ChatLlama automatically captures full-window screenshots when automation completes or the app closes.
+
+**Features**:
+- Full-window screenshot captures entire app UI including all panels (Settings, Chat, Cards, Trace)
+- Screenshot filename matches session log file with `.png` extension
+- Saved in `logs/` folder alongside corresponding `.log` file
+- Captured at two points:
+  1. When automation mode exits (EXIT/QUIT marker detected)
+  2. When app window closes (normal close event)
+
+**File Naming**:
+- Log file: `logs/session_2026-01-18_20-18-31.log`
+- Screenshot: `logs/session_2026-01-18_20-18-31.png`
+- Both use same timestamp for easy correlation
+
+**Use Cases**:
+- AI agents (like Copilot) can review final UI state after running test instructions
+- Visual verification of tool execution results (e.g., rendered SVG in Cards panel)
+- Debugging UI issues with full-screen context
+- Documentation of app state during automated tests
+
+**Implementation Details** (`src/chat.py`):
+- `_capture_screenshot()` method uses `QPixmap.grab()` to capture window
+- Called from `_schedule_shutdown()` in automation mode
+- Called from `closeEvent()` for normal app close
+- PNG format, full resolution (no compression options)
+- Logged as "Screenshot saved: path/to/file.png"
+
+Example log output:
+```
+2026-01-18 20:18:31,409 - INFO - Screenshot saved: D:\_GITN\chatllama\logs\session_2026-01-18_20-17-49.png
+2026-01-18 20:18:33,489 - INFO - Screenshot saved: D:\_GITN\chatllama\logs\session_2026-01-18_20-17-49.png
 ```
 
 ## Configuration

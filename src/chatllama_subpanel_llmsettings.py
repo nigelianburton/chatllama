@@ -25,7 +25,7 @@ class LlmSettingsPanel(QtWidgets.QFrame):
     """Reusable LLM settings panel with minimal rows.
 
     Rows:
-    1) Header: "<Local/LM Studio>: <model name or None>"
+    1) Header: "Local: <model name or None>"
     2) Model dropdown with Load button
     3) Context (text box, default 16384) and Temp (default 0.7)
     """
@@ -40,6 +40,10 @@ class LlmSettingsPanel(QtWidgets.QFrame):
         self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
         self.setFrameShadow(QtWidgets.QFrame.Shadow.Raised)
         self.setLineWidth(1)
+        # Allow shrinking to any size when parent narrows
+        self.setMinimumWidth(0)
+        # Expand to fill parent width
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
 
         self.title = title
         self.default_ctx = default_ctx
@@ -68,19 +72,24 @@ class LlmSettingsPanel(QtWidgets.QFrame):
 
         self.model_combo = QtWidgets.QComboBox()
         self.model_combo.setStyleSheet("color: #f5f5f5;")
+        self.model_combo.setMinimumWidth(0)  # Allow full shrinking
         self.model_combo.currentIndexChanged.connect(self.model_selection_changed.emit)
+        logger.debug(f"[LlmSettingsPanel] model_combo created: sizeHint={self.model_combo.sizeHint()}, minimumWidth={self.model_combo.minimumWidth()}")
 
         self.model_load_btn = QtWidgets.QPushButton("Load")
         self.model_load_btn.setStyleSheet("color: #f5f5f5;")
+        self.model_load_btn.setFixedWidth(48)
         self.model_load_btn.clicked.connect(self._on_load_clicked)
         model_row = QtWidgets.QHBoxLayout()
         model_row.setContentsMargins(0, 0, 0, 0)
-        model_row.setSpacing(6)
+        model_row.setSpacing(4)
         model_row.addWidget(self.model_combo, 1)
         model_row.addWidget(self.model_load_btn)
         model_row_widget = QtWidgets.QWidget()
+        model_row_widget.setMinimumWidth(0)  # Allow full shrinking
         model_row_widget.setLayout(model_row)
         layout.addWidget(model_row_widget)
+        logger.debug(f"[LlmSettingsPanel] model_row_widget created: sizeHint={model_row_widget.sizeHint()}, minimumWidth={model_row_widget.minimumWidth()}")
 
         if self.show_maker:
             self.maker_label = QtWidgets.QLabel("")
@@ -95,13 +104,15 @@ class LlmSettingsPanel(QtWidgets.QFrame):
         ctx_label.setStyleSheet("color: #f5f5f5;")
         self.ctx_edit = QtWidgets.QLineEdit()
         self.ctx_edit.setText("16384")
-        self.ctx_edit.setFixedWidth(90)
+        self.ctx_edit.setMinimumWidth(0)  # Allow full shrinking
+        self.ctx_edit.setMaximumWidth(90)  # Prefer 90 but allow shrinking
         self.ctx_edit.editingFinished.connect(self._emit_ctx_changed)
         temp_label = QtWidgets.QLabel("Temp")
         temp_label.setStyleSheet("color: #f5f5f5;")
         self.temp_edit = QtWidgets.QLineEdit()
         self.temp_edit.setText("0.7")
-        self.temp_edit.setFixedWidth(60)
+        self.temp_edit.setMinimumWidth(0)  # Allow full shrinking
+        self.temp_edit.setMaximumWidth(60)  # Prefer 60 but allow shrinking
         params_row.addWidget(ctx_label)
         params_row.addWidget(self.ctx_edit)
         params_row.addSpacing(8)
@@ -109,6 +120,7 @@ class LlmSettingsPanel(QtWidgets.QFrame):
         params_row.addWidget(self.temp_edit)
         params_row.addStretch(1)
         params_row_widget = QtWidgets.QWidget()
+        params_row_widget.setMinimumWidth(0)  # Allow full shrinking
         params_row_widget.setLayout(params_row)
         layout.addWidget(params_row_widget)
         # Provide compatibility adapter for existing code paths
@@ -118,6 +130,7 @@ class LlmSettingsPanel(QtWidgets.QFrame):
 
         layout.addStretch(1)
         self.setLayout(layout)
+        logger.debug(f"[LlmSettingsPanel] after setLayout: self.sizeHint={self.sizeHint()}, minimumWidth={self.minimumWidth()}, width={self.width()}")
 
         # Distinguish subpanel background from the parent Settings panel
         # Slightly different gray with subtle border and rounded corners
@@ -130,6 +143,15 @@ class LlmSettingsPanel(QtWidgets.QFrame):
             }
             """
         )
+    def sizeHint(self) -> QtCore.QSize:
+        # Remove any preferred width; keep the natural height so vertical layouts stay stable.
+        base = super().sizeHint()
+        return QtCore.QSize(0, base.height())
+
+    def minimumSizeHint(self) -> QtCore.QSize:
+        # Match the zero-width preference for layouts that consult minimums.
+        base = super().minimumSizeHint()
+        return QtCore.QSize(0, base.height())
 
     def populate_models(self, items: Iterable[Tuple[str, str]]) -> None:
         if not self.model_combo:

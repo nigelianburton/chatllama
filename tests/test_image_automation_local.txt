@@ -1,0 +1,3 @@
+tests/images/dummy.png
+Describe what you see in this image
+EXIT

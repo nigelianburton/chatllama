@@ -196,6 +196,8 @@ class MessageBubble(QtWidgets.QFrame):
         self.is_selected = False
         self.current_text = ""
         self.current_height = 40  # Min height
+        self.attachments_container: Optional[QtWidgets.QFrame] = None
+        self.attachments_layout: Optional[QtWidgets.QHBoxLayout] = None
         
         # Normalize message type
         type_map = {
@@ -225,6 +227,20 @@ class MessageBubble(QtWidgets.QFrame):
         self.svg_widget = QSvgWidget()
         self.svg_widget.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
         root_layout.addWidget(self.svg_widget)
+
+        # Optional thumbnail strip for attached images
+        self.attachments_container = QtWidgets.QFrame()
+        self.attachments_container.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed
+        )
+        self.attachments_layout = QtWidgets.QHBoxLayout()
+        self.attachments_layout.setContentsMargins(6, 4, 6, 6)
+        self.attachments_layout.setSpacing(6)
+        self.attachments_container.setLayout(self.attachments_layout)
+        self.attachments_container.setVisible(False)
+        self.attachments_container.setMinimumWidth(0)
+        self.attachments_container.setMaximumWidth(BUBBLE_WIDTH)
+        root_layout.addWidget(self.attachments_container)
         
         # Type overlay label (positioned absolutely at top-left, flush with parent top)
         self.type_overlay = QtWidgets.QLabel(self)
@@ -240,6 +256,59 @@ class MessageBubble(QtWidgets.QFrame):
         # Set initial content if provided
         if content_widget:
             self.set_content_widget(content_widget)
+
+    def set_images(self, image_paths: list[str]) -> None:
+        """Display up to 3 image thumbnails beneath the text bubble."""
+        if self.attachments_container is None or self.attachments_layout is None:
+            logger.debug("Attachments container not initialized on MessageBubble")
+            return
+
+        # Clear previous thumbnails
+        while self.attachments_layout.count():
+            item = self.attachments_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        paths = list(image_paths or [])[:3]
+        if not paths:
+            self.attachments_container.setVisible(False)
+            self.attachments_container.setMinimumHeight(0)
+            self.attachments_container.setMaximumHeight(0)
+            self.updateGeometry()
+            return
+
+        thumb_size = 72
+        for path in paths:
+            label = QtWidgets.QLabel()
+            label.setFixedSize(thumb_size, thumb_size)
+            label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            label.setStyleSheet("border: 1px solid #666; border-radius: 4px; background-color: #ffffff;")
+
+            pix = QtGui.QPixmap(path)
+            if not pix.isNull():
+                scaled = pix.scaled(
+                    thumb_size,
+                    thumb_size,
+                    QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                    QtCore.Qt.TransformationMode.SmoothTransformation,
+                )
+                label.setPixmap(scaled)
+            else:
+                label.setText("Image\nnot found")
+                label.setStyleSheet("color: #ff0000; background-color: #f5f5f5; border: 1px solid #666; border-radius: 4px;")
+
+            self.attachments_layout.addWidget(label)
+
+        # Adjust container sizing and visibility
+        width = len(paths) * thumb_size + max(0, len(paths) - 1) * self.attachments_layout.spacing() + 12
+        self.attachments_container.setMinimumWidth(width)
+        self.attachments_container.setMaximumWidth(max(width, BUBBLE_WIDTH))
+        self.attachments_container.setMinimumHeight(thumb_size + 12)
+        self.attachments_container.setMaximumHeight(thumb_size + 12)
+        self.attachments_container.setVisible(True)
+        self.updateGeometry()
+        self.update()
     
     def set_content_widget(self, content_widget: QtWidgets.QWidget) -> None:
         """Set content from a widget (for backwards compatibility).
@@ -290,5 +359,8 @@ class MessageBubble(QtWidgets.QFrame):
     
     def sizeHint(self) -> QtCore.QSize:
         """Return size based on SVG dimensions plus 12px top padding."""
-        # Add 12px top padding (layout margin) to bubble height
-        return QtCore.QSize(BUBBLE_WIDTH, self.current_height + 12)
+        height = self.current_height + 12
+        if self.attachments_container and self.attachments_container.isVisible():
+            # Add attachments strip height plus small gap
+            height += self.attachments_container.sizeHint().height() + 4
+        return QtCore.QSize(BUBBLE_WIDTH, height)

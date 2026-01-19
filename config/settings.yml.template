@@ -9,9 +9,8 @@ gpu_offload_layers: 99
 # Choose one of these servers or create your own:
 # - test_mcp/fashion_server/server.py (fashion advice with user profiles)
 # - test_mcp/fashion_stdio.py (simple fashion lookup)
-# - test_mcp/lm_studio_server.py (OPTIONAL: query LM Studio for complex tasks)
 mcp_server_enabled: false
-mcp_server_command: python test_mcp/lm_studio_server.py
+mcp_server_command: python test_mcp/fashion_stdio.py
 
 # Tool Integration: Enable to show tools in system prompt
 # CARDS: A "card" is a panel in the ChatLlama UI (like a browser window) where tools can display
@@ -65,14 +64,4 @@ tool_preamble: |
   its results appear there for the user to see. Use tools proactively to enhance your
   responses with visual or specialized information.
 
-model_capabilities:
-  test/model-1:
-    has_vision: true
-    has_tools: true
-    context_length: 8192
-    vram_mb: 4500
-  test/model-2:
-    has_vision: false
-    has_tools: true
-    context_length: 16384
-    vram_mb: 2500
+model_capabilities: {}

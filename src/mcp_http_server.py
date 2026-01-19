@@ -124,6 +124,78 @@ class SVGLayoutStudioMCP:
         self._tools_cache = tools
         return tools
 
+    def call_tool(self, tool_name: str, arguments: dict) -> Optional[Dict[str, Any]]:
+        """Call a tool directly and return the result.
+        
+        This method allows synchronous execution of built-in tools without going
+        through the FastMCP HTTP server.
+        """
+        logger.debug(f"Calling built-in tool: {tool_name} with {arguments}")
+        
+        try:
+            if tool_name == "create_artboard":
+                orient = (arguments.get("orientation", "portrait") or "portrait").lower()
+                width = arguments.get("width")
+                height = arguments.get("height")
+                
+                if width is None or height is None:
+                    if orient == "landscape":
+                        width, height = 1400, 1000
+                    else:
+                        width, height = 1000, 1400
+                
+                artboard_guid = str(uuid.uuid4())
+                rules_json = self._load_rules()
+                return {
+                    "artboard_guid": artboard_guid,
+                    "width": width,
+                    "height": height,
+                    "orientation": orient,
+                    "viewBox": f"0 0 {width} {height}",
+                    "rules": rules_json,
+                }
+                
+            elif tool_name == "render_svg":
+                artboard_guid = arguments.get("artboard_guid")
+                svg = arguments.get("svg")
+                
+                if not artboard_guid or not svg:
+                    return {"status": "error", "message": "Missing artboard_guid or svg"}
+                
+                try:
+                    self._ui_display_svg(svg)
+                    return {
+                        "status": "ok",
+                        "artboard_guid": artboard_guid,
+                        "length": len(svg),
+                    }
+                except Exception as e:
+                    logger.error(f"render_svg failed: {e}")
+                    return {"status": "error", "message": str(e)}
+                    
+            elif tool_name == "list_svg_capabilities":
+                return {
+                    "tools": [
+                        {
+                            "name": "create_artboard",
+                            "description": "Create an SVG canvas (artboard) and receive strict SVG rules",
+                            "first_step": True,
+                        },
+                        {
+                            "name": "render_svg",
+                            "description": "Render provided SVG markup into the user's UI",
+                            "requires": ["artboard_guid"],
+                        },
+                    ]
+                }
+            else:
+                logger.warning(f"Unknown tool: {tool_name}")
+                return {"status": "error", "message": f"Unknown tool: {tool_name}"}
+                
+        except Exception as e:
+            logger.error(f"Tool execution failed: {e}")
+            return {"status": "error", "message": str(e)}
+
     def start(self) -> bool:
         """Start the FastMCP HTTP server in a background thread."""
         if FastMCP is None:

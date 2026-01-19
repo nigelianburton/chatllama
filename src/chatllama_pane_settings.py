@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 class SettingsPanel(QtWidgets.QFrame):
-    """Settings panel stacking local (cpp), LM Studio, and MCP controls."""
+    """Settings panel stacking local (llama.cpp) and MCP controls (no LM Studio)."""
     
     def __init__(self, default_ctx: int, settings: Optional[dict] = None, parent=None):
         super().__init__(parent)
@@ -29,32 +29,20 @@ class SettingsPanel(QtWidgets.QFrame):
             show_maker=True,
             show_current=True,
         )
-        self.lmstudio_panel = LlmSettingsPanel(
-            title="LM Studio",
-            default_ctx=default_ctx,
-            show_maker=False,
-            show_current=False,
-        )
-
         # MCP panels will be created per server below
         self.mcp_panels: list[McpInfoPanel] = []
         self.builtin_mcp_servers: list[dict] = []  # Store built-in MCP configs
-
-        # LMS toggle button (will be placed in Settings header row in ChatWindow)
-        self.lms_toggle = QtWidgets.QPushButton("LMS")
-        self.lms_toggle.setCheckable(True)
-        self.lms_toggle.setChecked(False)  # default OFF
-        self.lms_toggle.setToolTip("Toggle LM Studio controls")
-        self.lms_toggle.toggled.connect(self._on_lms_toggled)
 
         self._build_ui()
     
     def _build_ui(self) -> None:
         # Wrap subpanels in a vertical-only scroll area
         scroll = QtWidgets.QScrollArea()
+        scroll.setMinimumWidth(0)
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         content = QtWidgets.QWidget()
+        content.setMinimumWidth(0)
         vbox = QtWidgets.QVBoxLayout(content)
         vbox.setContentsMargins(8, 8, 8, 8)
         vbox.setSpacing(8)
@@ -62,9 +50,6 @@ class SettingsPanel(QtWidgets.QFrame):
         # No internal toolbar row; LMS toggle is shown in the outer Settings caption
 
         vbox.addWidget(self.cpp_panel)
-        # LM Studio hidden by default, shown when toggle is ON
-        self.lmstudio_panel.setVisible(False)
-        vbox.addWidget(self.lmstudio_panel)
 
         # Create one MCP subpanel per configured server
         servers = self.settings.get("mcp_servers", []) or []
@@ -75,6 +60,8 @@ class SettingsPanel(QtWidgets.QFrame):
 
         vbox.addStretch(1)
         scroll.setWidget(content)
+        logger.debug(f"[SettingsPanel] scroll.sizeHint={scroll.sizeHint()}, content.sizeHint={content.sizeHint()}, cpp_panel.sizeHint={self.cpp_panel.sizeHint()}")
+        logger.debug(f"[SettingsPanel] cpp_panel.minimumWidth={self.cpp_panel.minimumWidth()}, content.minimumWidth={content.minimumWidth()}, scroll.minimumWidth={scroll.minimumWidth()}")
 
         layout = QtWidgets.QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -93,10 +80,7 @@ class SettingsPanel(QtWidgets.QFrame):
 
         self.setLayout(layout)
 
-    def _on_lms_toggled(self, checked: bool) -> None:
-        """Show/hide LM Studio subpanel based on toggle state."""
-        if self.lmstudio_panel:
-            self.lmstudio_panel.setVisible(bool(checked))
+    # LM Studio removed; no toggle behavior
 
     def register_builtin_mcp(self, server_config: dict) -> None:
         """Register a built-in MCP server and add it to the UI.

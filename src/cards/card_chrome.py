@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class CardChrome(CardBase):
-    """Card that hosts a Chromium-based browser via QWebEngineView."""
+    """SVG display card for visual content (no WebEngine)."""
 
     name: str = "card_chrome"
     functions: List[Dict[str, Any]] = [

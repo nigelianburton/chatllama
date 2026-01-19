@@ -27,6 +27,8 @@ class McpInfoPanel(QtWidgets.QFrame):
         super().__init__(parent)
         self.setObjectName("McpInfoPanel")
         self.settings = settings or {}
+        # Allow shrinking to any size
+        self.setMinimumWidth(0)
         # Use fixed server if provided; else load from settings list
         if server:
             self.mcp_servers: List[Dict[str, Any]] = [server]
@@ -79,7 +81,7 @@ class McpInfoPanel(QtWidgets.QFrame):
         left_box.setSpacing(4)
 
         self.tools_list = QtWidgets.QListWidget()
-        self.tools_list.setMinimumWidth(160)
+        self.tools_list.setMaximumWidth(200)  # Prefer 200 but allow shrinking
         self.tools_list.itemSelectionChanged.connect(self._on_tool_selected)
         left_box.addWidget(self.tools_list, 1)
 

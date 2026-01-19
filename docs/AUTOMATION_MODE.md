@@ -43,6 +43,28 @@ How do transformers work?
 EXIT
 ```
 
+### Image Attachments
+
+The **first line** of an automation file can be an image file path. If it is a valid image file, the system will attach it to the first message.
+
+**Supported image formats**: `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.webp`
+
+Example with image:
+
+```
+T:\pic1.JPG
+Describe what you see in this image
+EXIT
+```
+
+In this example:
+1. Line 1 (`T:\pic1.JPG`) is detected as an image file path
+2. The image is attached to the first message
+3. Line 2 becomes the first prompt (sent with the image)
+4. Line 3 triggers automatic shutdown
+
+**Note**: If the first line is not a valid image file path, it will be treated as a regular message prompt.
+
 ### Special Markers
 
 - **`EXIT`** - Triggers automatic application shutdown after the model responds to the previous message

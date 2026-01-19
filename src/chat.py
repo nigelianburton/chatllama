@@ -8,9 +8,20 @@ import yaml
 import argparse
 import json
 import re
+import base64
+import mimetypes
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
+from PyQt6.QtGui import QPixmap
+from chatllama_MODELS import (
+    LoadResult,
+    LlamaModelLoader,
+    ModelValidator,
+    ModelCapabilities,
+    ModelLoadWorker,
+)
+from chatllama_mcp_server import McpToolManager
 
 try:
     import gguf
@@ -32,6 +43,7 @@ main_log_file = PROJECT_ROOT / "chatllama.log"
 # Session-specific log (one per run with timestamp)
 session_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 session_log_file = LOGS_DIR / f"session_{session_timestamp}.log"
+session_screenshot_file = LOGS_DIR / f"session_{session_timestamp}.png"
 
 log_format = "%(asctime)s - %(levelname)s - %(message)s"
 
@@ -40,6 +52,16 @@ if sys.platform == 'win32':
     import io
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+# Add TRACE level (below DEBUG) for protocol-level traffic
+TRACE = 5
+logging.addLevelName(TRACE, 'TRACE')
+
+def trace(self, message, *args, **kwargs):
+    if self.isEnabledFor(TRACE):
+        self._log(TRACE, message, args, **kwargs)
+
+logging.Logger.trace = trace
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -56,47 +78,25 @@ logger.info(f"ChatLlama started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 logger.info(f"Session log: {session_log_file}")
 logger.info("=" * 60)
 
-# Load settings from config/settings.yml
+# Load settings from config/settings.yml (also sets up environment)
+from chatllama_MODELS import load_settings
+
 settings_file = CONFIG_DIR / "settings.yml"
-if settings_file.exists():
-    with open(settings_file, 'r') as f:
-        settings = yaml.safe_load(f)
-    logger.info(f"Loaded settings from {settings_file}")
-else:
-    logger.error(f"Settings file not found at {settings_file}")
-    settings = {}
+config = load_settings(settings_file)
 
-# Extract settings with fallbacks
-lm_studio_path = settings.get("llama_cpp_path", r"C:\Users\nigel\.lmstudio\extensions\backends\llama.cpp-win-x86_64-nvidia-cuda12-avx2-1.103.2")
-MODELS_DIR = Path(settings.get("models_dir", r"D:\LLM Models"))
-DEFAULT_MODEL = settings.get("default_model", "mradermacher\\Huihui-LFM2-2.6B-Exp-abliterated-GGUF")
-LLAMA_SERVER_PORT = settings.get("llama_server_port", 8000)
-GPU_OFFLOAD_LAYERS = settings.get("gpu_offload_layers", 99)
-MCP_SERVER_ENABLED = settings.get("mcp_server_enabled", True)
-MCP_SERVER_COMMAND = settings.get("mcp_server_command", "python test_mcp/fashion_server/server.py")
-TOOL_INTEGRATION_ENABLED = settings.get("tool_integration_enabled", True)
-TOOL_PREAMBLE = settings.get("tool_preamble", "You have access to specialized tools that can help you serve the user better.")
-DEFAULT_CTX = int(settings.get("default_ctx", 4096))
-MODEL_CTX_OVERRIDES: dict[str, int] = settings.get("model_ctx_overrides", {}) or {}
+# Extract configuration into module-level constants
+MODELS_DIR = config["models_dir"]
+DEFAULT_MODEL = config["default_model"]
+LLAMA_SERVER_PORT = config["llama_server_port"]
+GPU_OFFLOAD_LAYERS = config["gpu_offload_layers"]
+MCP_SERVER_ENABLED = config["mcp_server_enabled"]
+MCP_SERVER_COMMAND = config["mcp_server_command"]
+TOOL_INTEGRATION_ENABLED = config["tool_integration_enabled"]
+TOOL_PREAMBLE = config["tool_preamble"]
+DEFAULT_CTX = config["default_ctx"]
+settings = config["_raw_settings"]  # Keep raw settings for validator updates
 
-logger.debug(f"lm_studio_path: {lm_studio_path}")
-logger.debug(f"MODELS_DIR: {MODELS_DIR} (exists: {MODELS_DIR.exists()})")
-logger.debug(f"DEFAULT_MODEL: {DEFAULT_MODEL}")
-logger.debug(f"LLAMA_SERVER_PORT: {LLAMA_SERVER_PORT}")
-logger.debug(f"GPU_OFFLOAD_LAYERS: {GPU_OFFLOAD_LAYERS}")
-logger.debug(f"MCP_SERVER_ENABLED: {MCP_SERVER_ENABLED}")
-logger.debug(f"MCP_SERVER_COMMAND: {MCP_SERVER_COMMAND}")
-
-# 1. Direct llama-cpp-python to the specific llama.dll
-os.environ["LLAMA_CPP_LIB"] = os.path.join(lm_studio_path, "llama.dll")
-logger.debug(f"LLAMA_CPP_LIB set to: {os.environ['LLAMA_CPP_LIB']}")
-
-# 2. Tell Windows where to find the supporting CUDA and GGML dlls
-# This is crucial for Python 3.8+ on Windows
-os.add_dll_directory(lm_studio_path)
-logger.debug(f"Added DLL directory: {lm_studio_path}")
-
-# 3. Set Qt plugin path for PyQt6 (must be before importing PyQt6)
+# Set Qt plugin path for PyQt6 (must be before importing PyQt6)
 # This is needed when running directly without conda activation
 if "QT_PLUGIN_PATH" not in os.environ:
     conda_prefix = os.environ.get("CONDA_PREFIX")
@@ -112,205 +112,16 @@ if "QT_PLUGIN_PATH" not in os.environ:
 else:
     logger.debug(f"QT_PLUGIN_PATH already set to: {os.environ['QT_PLUGIN_PATH']}")
 
-# Force QWebEngine to use software rendering and disable sandbox
-os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
-os.environ["QT_QUICK_BACKEND"] = "software"
-os.environ["QT_XCB_GL_INTEGRATION"] = "none"
-os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-gpu --disable-software-rasterizer --in-process-gpu"
-logger.debug("Set WebEngine environment variables: sandbox disabled, software backend")
+# WebEngine removed: no Chromium or QWebEngine configuration
 
-from llama_cpp import Llama
 from PyQt6 import QtCore, QtGui, QtWidgets
 from chatllama_pane_settings import SettingsPanel
 from chatllama_cpp import ChatLlamaCpp
-from chatllama_lmstudio import ChatLlamaLmStudio
+# LM Studio support removed
 from chatllama_pane_chat import PromptInput, ChatPanel
 from chatllama_pane_cards import CardsPanel
 from chatllama_pane_trace import TracePanel
 from chatllama_pane_hwinfo import HardwareInfoPanel
-
-
-class ModelCapabilities:
-    """Detect model capabilities from GGUF metadata with caching support
-    
-    Tool Detection:
-        Checks the tokenizer.chat_template field for tool-handling logic:
-        - "if tools" pattern (Qwen3, Huihui): {%- if tools -%}
-        - "render_extra_keys" pattern (Nemotron): for function calling
-        
-    Vision Detection:
-        Checks GGUF metadata field names for vision-related keywords:
-        - "vision", "visual", "image", "clip", "projector", "mmproj"
-        Scans both main model and mmproj files for completeness.
-        Also checks filenames for "-VL-" (Vision Language) pattern.
-    
-    Context Length:
-        Reads from GGUF metadata fields (architecture-specific)
-        
-    VRAM Usage:
-        Measured by briefly loading model and checking GPU memory
-    """
-    
-    @staticmethod
-    def get_capabilities(model_path: Path, measure_vram: bool = False) -> dict:
-        """Detect vision and tool capabilities from GGUF file
-        
-        Args:
-            model_path: Path to model directory
-            measure_vram: Whether to load model and measure VRAM usage
-        
-        Returns:
-            dict: {
-                "has_vision": bool,      # Model supports vision/image input
-                "has_tools": bool,       # Model has tool/function calling
-                "context_length": int,   # Max context tokens
-                "vram_mb": int,          # VRAM usage in MB (if measured)
-                "display_name": str      # Friendly model name
-            }
-        """
-        capabilities = {
-            "has_vision": False,
-            "has_tools": False,
-            "context_length": 0,
-            "vram_mb": 0,
-            "display_name": model_path.stem
-        }
-        
-        if not gguf:
-            return capabilities
-        
-        try:
-            # Try to find the GGUF file in the model directory
-            gguf_files = list(model_path.glob("*.gguf"))
-            if not gguf_files:
-                return capabilities
-            
-            # Prefer main model files (non-mmproj) but also check mmproj for vision
-            # Sort to prefer main model files over mmproj (vision projection files)
-            main_files = [f for f in gguf_files if "mmproj" not in f.name]
-            mmproj_files = [f for f in gguf_files if "mmproj" in f.name]
-            
-            # Main model files typically have tools/chat support
-            # mmproj files have vision projection data
-            preferred_file = main_files[0] if main_files else mmproj_files[0]
-            
-            # Read metadata from preferred file
-            try:
-                reader = gguf.GGUFReader(str(preferred_file))
-            except Exception as e:
-                logger.warning(f"Failed to read GGUF file {preferred_file}: {e}")
-                return capabilities
-            
-            if reader.fields:
-                # Get display name
-                if "general.name" in reader.fields:
-                    try:
-                        v = reader.fields["general.name"]
-                        if len(v.parts) > 3:
-                            capabilities["display_name"] = bytes(v.parts[-1]).decode('utf-8', errors='ignore')
-                    except:
-                        pass
-                
-                # Detect vision from field names
-                vision_keywords = ["vision", "visual", "image", "clip", "projector", "mmproj"]
-                for field_name in reader.fields.keys():
-                    if any(kw in field_name.lower() for kw in vision_keywords):
-                        capabilities["has_vision"] = True
-                        break
-                
-                # Also check mmproj file for vision if not found in main model
-                if not capabilities["has_vision"] and mmproj_files:
-                    try:
-                        mmproj_reader = gguf.GGUFReader(str(mmproj_files[0]))
-                        for field_name in mmproj_reader.fields.keys():
-                            if any(kw in field_name.lower() for kw in vision_keywords):
-                                capabilities["has_vision"] = True
-                                break
-                    except:
-                        pass
-                
-                # Check filename for vision indicators (VL = Vision Language)
-                if not capabilities["has_vision"]:
-                    for f in gguf_files:
-                        if "-vl-" in str(f).lower() or "vision" in str(f).lower():
-                            capabilities["has_vision"] = True
-                            break
-                
-                # Detect tools from chat template
-                # Tools are indicated by "if tools" in the template, or render_extra_keys
-                if "tokenizer.chat_template" in reader.fields:
-                    try:
-                        template_field = reader.fields["tokenizer.chat_template"]
-                        if hasattr(template_field, 'parts') and template_field.parts:
-                            template = bytes(template_field.parts[-1]).decode('utf-8', errors='ignore')
-                            # Check for tool-handling markers in template
-                            # These are template conditionals that enable tool support
-                            tool_markers = [
-                                "if tools",           # Qwen/Huihui format: {%- if tools -%}
-                                "render_extra_keys",  # Nemotron format for function calling
-                            ]
-                            if any(marker in template for marker in tool_markers):
-                                capabilities["has_tools"] = True
-                    except:
-                        pass
-                
-                # Extract context length (architecture-specific field names)
-                context_fields = [
-                    "llama.context_length",
-                    "context_length",
-                    f"{capabilities.get('architecture', 'llama')}.context_length"
-                ]
-                
-                for field in reader.fields.keys():
-                    if "context_length" in field.lower():
-                        try:
-                            ctx_field = reader.fields[field]
-                            if hasattr(ctx_field, 'parts') and ctx_field.parts:
-                                # Context length is usually stored as integer
-                                capabilities["context_length"] = int.from_bytes(
-                                    bytes(ctx_field.parts[-1]), byteorder='little'
-                                )
-                                break
-                        except:
-                            pass
-            
-            # Measure VRAM if requested
-            if measure_vram and preferred_file and ".Q" in preferred_file.name:
-                try:
-                    import GPUtil
-                    # Get GPU memory before loading
-                    gpus = GPUtil.getGPUs()
-                    if gpus:
-                        mem_before = gpus[0].memoryUsed
-                        
-                        # Temporarily load model
-                        logger.debug(f"Measuring VRAM for {model_path.name}...")
-                        test_model = Llama(
-                            model_path=str(preferred_file),
-                            n_ctx=512,  # Small context for testing
-                            n_gpu_layers=GPU_OFFLOAD_LAYERS,
-                            verbose=False
-                        )
-                        
-                        # Get memory after loading
-                        gpus = GPUtil.getGPUs()
-                        mem_after = gpus[0].memoryUsed
-                        capabilities["vram_mb"] = int(mem_after - mem_before)
-                        
-                        # Clean up
-                        del test_model
-                        logger.debug(f"VRAM usage: {capabilities['vram_mb']} MB")
-                except Exception as e:
-                    logger.debug(f"Could not measure VRAM: {e}")
-        
-        except Exception as e:
-            logger.debug(f"Could not read metadata for {model_path}: {e}")
-        
-        return capabilities
-
-
-
-
 
 
 class ChatWorker(QtCore.QObject):
@@ -320,7 +131,7 @@ class ChatWorker(QtCore.QObject):
     error_occurred = QtCore.pyqtSignal(str)
     usage_ready = QtCore.pyqtSignal(dict)  # Emits token usage stats
 
-    def __init__(self, model: Llama, messages: list[dict], parent=None):
+    def __init__(self, model, messages: list[dict], parent=None):
         super().__init__(parent)
         self.model = model
         self.messages = messages
@@ -328,6 +139,7 @@ class ChatWorker(QtCore.QObject):
 
     def run(self) -> None:
         """Stream chat completion and emit chunks."""
+        import time
         try:
             response_text = ""
             # Build the completion request (tools now injected via system prompt)
@@ -335,25 +147,33 @@ class ChatWorker(QtCore.QObject):
                 "messages": self.messages,
                 "stream": True
             }
-            logger.debug(f"Starting chat completion with {len(self.messages)} messages")
+            
+            # Start timing and log with visual marker
+            start_time = time.time()
+            first_token_time = None
+            logger.info("[LLM] ►►► Starting completion: messages=%d", len(self.messages))
             
             chunk_count = 0
             last_log_length = 0
             for chunk in self.model.create_chat_completion(**completion_kwargs):
                 chunk_count += 1
-                if chunk_count <= 5 or chunk_count % 200 == 0:
-                    logger.debug(f"Chunk #{chunk_count}")
                 
                 delta = chunk.get("choices", [{}])[0].get("delta", {})
                 content = delta.get("content", "")
                 if content:
+                    # Log first token latency
+                    if first_token_time is None:
+                        first_token_time = time.time()
+                        latency = first_token_time - start_time
+                        logger.info("[LLM] First token after %.2fs", latency)
+                    
                     response_text += content
                     self.chunk_ready.emit(content)
                     
-                    # Log accumulated text every 100 characters
-                    if len(response_text) >= last_log_length + 100:
-                        logger.debug(f"[Text at {len(response_text)} chars] {response_text[last_log_length:last_log_length+100]}")
-                        last_log_length = len(response_text)
+                    # Log every 10th chunk at DEBUG (optional detail)
+                    if chunk_count % 10 == 0:
+                        elapsed = time.time() - start_time
+                        logger.debug("[LLM Stream] Chunk %d (+%.2fs): %s", chunk_count, elapsed, content[:30])
                 
                 # Capture usage stats from the final chunk
                 usage = chunk.get("usage")
@@ -364,8 +184,15 @@ class ChatWorker(QtCore.QObject):
                         "total_tokens": usage.get("total_tokens", 0)
                     }
             
-            logger.debug(f"Streaming complete: {chunk_count} chunks, {len(response_text)} total chars")
-            logger.info(f"Final response: {response_text[:200]}..." if len(response_text) > 200 else f"Final response: {response_text}")
+            # Calculate final metrics
+            end_time = time.time()
+            total_time = end_time - start_time
+            chars_per_sec = len(response_text) / total_time if total_time > 0 else 0
+            
+            # Log completion with metrics and visual marker
+            logger.info("[LLM] ◄◄◄ Complete: %d chars (%d chunks) in %.2fs @ %.1f chars/s", 
+                       len(response_text), chunk_count, total_time, chars_per_sec)
+            logger.info("[LLM] Response: %s", response_text[:200] + "..." if len(response_text) > 200 else response_text)
             
             # Emit usage stats if available
             if self.usage_stats["total_tokens"] > 0:
@@ -406,10 +233,18 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._chat_thread: Optional[QtCore.QThread] = None
         self._chat_worker: Optional[ChatWorker] = None
         self._use_llama_server = False
-        self._llama_server_process = None
         self._mcp_server_process = None
         self._mcp_http_server = None
         self._mcp_tools = None  # Will be populated during chat
+        self._mcp_manager = McpToolManager(
+            command=MCP_SERVER_COMMAND,
+            project_root=PROJECT_ROOT,
+            tool_preamble=TOOL_PREAMBLE,
+            tool_integration_enabled=TOOL_INTEGRATION_ENABLED,
+            logger=logger,
+        )
+        self._load_thread: Optional[QtCore.QThread] = None
+        self._load_worker: Optional[ModelLoadWorker] = None
         self._last_local_model: Optional[str] = None  # Store local model when switching modes
         self._cpp_handler: Optional[ChatLlamaCpp] = None
         self._lmstudio_handler: Optional[ChatLlamaLmStudio] = None
@@ -420,13 +255,37 @@ class ChatWindow(QtWidgets.QMainWindow):
         self.pending_messages = []
         self.processing_message = False
         self.selected_model = selected_model  # Model specified via command line
+        self.session_screenshot_file = session_screenshot_file  # Store screenshot path
         
         # Hardware info panel (GPU + token stats)
         self._hwinfo_panel: Optional[HardwareInfoPanel] = None
         
+        # Model validator for discovery and capabilities
+        self._model_validator = ModelValidator(
+            models_dir=MODELS_DIR,
+            settings_file=settings_file,
+            settings=settings,
+            model_capabilities_class=ModelCapabilities,
+            parent_widget=self
+        )
+        self._model_loader = LlamaModelLoader(
+            models_dir=MODELS_DIR,
+            gpu_offload_layers=GPU_OFFLOAD_LAYERS,
+            port=LLAMA_SERVER_PORT,
+            llama_server_path=config["llama_server_path"],
+        )
+        logger.info(f"ModelValidator initialized with models_dir={MODELS_DIR}, last_model={settings.get('last_model')}")
+
+        # Ensure the models drive is available (external drive guard)
+        if not self._ensure_models_drive_available():
+            return
+        
         self._build_ui()
+        # Discover available models and update the settings panel combo
+        logger.info("Populating model list via ModelValidator")
+        self._populate_models_with_capabilities()
         self._check_and_launch_mcp_server()
-        self._load_default_model()
+        self._init_model_on_startup()
         if self._hwinfo_panel:
             self._hwinfo_panel.start_monitoring()
         
@@ -463,6 +322,30 @@ class ChatWindow(QtWidgets.QMainWindow):
                 logger.error("Failed to start built-in MCP HTTP server")
         except Exception as e:
             logger.error(f"start_built_in_mcp_http error: {e}")
+
+    def _ensure_models_drive_available(self) -> bool:
+        """Check that the models drive is mounted; warn and close if not."""
+        try:
+            drive_root = Path(MODELS_DIR.anchor or MODELS_DIR.drive or str(MODELS_DIR)).anchor
+            drive_path = Path(drive_root) if drive_root else MODELS_DIR.drive
+            drive_path = Path(drive_path) if drive_path else MODELS_DIR
+
+            if drive_path and not Path(drive_path).exists():
+                msg = (
+                    f"The models drive appears to be unavailable: {drive_path}.\n\n"
+                    f"Expected models directory: {MODELS_DIR}\n"
+                    "Please connect or mount the external drive, then restart ChatLlama."
+                )
+                logger.error(msg)
+                QtWidgets.QMessageBox.warning(self, "Models drive not available", msg)
+                QtCore.QTimer.singleShot(0, self.close)
+                return False
+
+            # Drive is reachable; if the directory itself is missing, allow normal discovery
+            return True
+        except Exception as e:
+            logger.error(f"Failed drive availability check: {e}")
+            return True
 
 
     def _build_ui(self) -> None:
@@ -649,7 +532,6 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._trace_panel = TracePanel()
 
         self._cpp_handler = ChatLlamaCpp(self)
-        self._lmstudio_handler = ChatLlamaLmStudio(self)
 
         def apply_equal_policy(widget: QtWidgets.QWidget) -> None:
             policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Preferred)
@@ -699,10 +581,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                 toolbar.setStyleSheet("background-color: #33373d;")
 
             hbox.addWidget(title_label)
-            # Place LMS toggle in the same row as the Settings title
-            if title_lower == "settings" and getattr(self, "_settings_panel", None) and getattr(self._settings_panel, "lms_toggle", None):
-                hbox.addSpacing(8)
-                hbox.addWidget(self._settings_panel.lms_toggle)
+            # LM Studio toggle removed
             hbox.addStretch(1)
             toolbar.setLayout(hbox)
 
@@ -723,10 +602,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._settings_panel.cpp_panel.model_selection_changed.connect(self._cpp_handler.on_selection_changed)
         self._settings_panel.cpp_panel.ctx_changed.connect(self._on_ctx_changed)
 
-        if self._lmstudio_handler:
-            self._settings_panel.lmstudio_panel.model_load_requested.connect(self._lmstudio_handler.load_model)
-            self._settings_panel.lmstudio_panel.model_selection_changed.connect(self._lmstudio_handler.on_selection_changed)
-        self._settings_panel.lmstudio_panel.ctx_changed.connect(self._on_lmstudio_ctx_changed)
+        # LM Studio signal connections removed
         
         # Connect signals from chat panel
         self._chat_panel.send_requested.connect(lambda text: self._on_send_message())
@@ -736,11 +612,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             for panel in self._settings_panel.mcp_panels:
                 panel.tool_call_requested.connect(self._on_mcp_tool_call_requested)
         
-        # Populate models in settings panel
-        if self._cpp_handler:
-            self._cpp_handler.populate_models_with_capabilities()
-        if self._lmstudio_handler:
-            self._lmstudio_handler.populate_models_with_capabilities()
+        # LM Studio populate removed
 
         splitter.addWidget(settings_wrap)
         splitter.addWidget(chat_wrap)
@@ -887,9 +759,18 @@ class ChatWindow(QtWidgets.QMainWindow):
     # Properties for backwards compatibility with old direct widget access
     @property
     def _model_combo(self):
-        if self._settings_panel and self._settings_panel.cpp_panel:
-            return self._settings_panel.cpp_panel.model_combo
-        return None
+        panel = getattr(self, "_settings_panel", None)
+        if not panel:
+            logger.warning("_model_combo: settings panel is not initialized")
+            return None
+        cpp = getattr(panel, "cpp_panel", None)
+        if not cpp:
+            logger.warning("_model_combo: cpp_panel is not available on settings panel")
+            return None
+        combo = getattr(cpp, "model_combo", None)
+        if combo is None:
+            logger.warning("_model_combo: model_combo is None on cpp_panel")
+        return combo
     
     @property
     def _status_label(self):
@@ -923,187 +804,45 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     @staticmethod
     def _discover_models_static() -> list[str]:
-        """Static method to discover models (can be called without instance)."""
-        logger.info(f"Starting model discovery in: {MODELS_DIR}")
+        """Static method to discover models (can be called without instance).
         
-        if not MODELS_DIR.exists():
-            logger.error(f"MODELS_DIR does not exist: {MODELS_DIR}")
-            return []
-        
-        models = []
-        try:
-            # Iterate through author folders
-            for author_dir in sorted(MODELS_DIR.iterdir()):
-                if not author_dir.is_dir():
-                    continue
-                
-                logger.debug(f"Scanning author folder: {author_dir.name}")
-                
-                # Look for model folders within each author directory
-                for model_dir in sorted(author_dir.iterdir()):
-                    if not model_dir.is_dir():
-                        continue
-                    
-                    # Check if this folder has .gguf files (or .part files being downloaded)
-                    gguf_files = list(model_dir.glob("*.gguf"))
-                    part_files = list(model_dir.glob("*.part"))
-                    
-                    if gguf_files or part_files:
-                        # Store the relative path from MODELS_DIR for display
-                        relative_path = model_dir.relative_to(MODELS_DIR)
-                        models.append(str(relative_path))
-                        logger.debug(f"Found model: {relative_path} ({len(gguf_files)} .gguf, {len(part_files)} .part)")
-                    else:
-                        logger.debug(f"Skipped (no .gguf files): {model_dir.name}")
-            
-            logger.info(f"Model discovery complete. Found {len(models)} models.")
-            return sorted(models)
-        except Exception as e:
-            logger.error(f"Error discovering models: {e}")
-            return []
+        DEPRECATED: Use ModelValidator.discover_models() instead.
+        Kept for backward compatibility with handlers.
+        """
+        validator = ModelValidator(
+            models_dir=MODELS_DIR,
+            settings_file=settings_file,
+            settings=settings,
+            model_capabilities_class=ModelCapabilities,
+            parent_widget=None
+        )
+        return validator.discover_models()
+
+    def _discover_models(self) -> list[str]:
+        """Discover models using the model validator."""
+        return self._model_validator.discover_models()
 
     def _populate_models_with_capabilities(self) -> None:
-        """Populate model combo box with model names and capability badges.
-        
-        Uses cached capabilities from settings.yml if available,
-        otherwise scans GGUF metadata and shows progress dialog.
-        """
-        models = self._discover_models()
-        
-        # Load cached capabilities from settings
-        capabilities_cache = settings.get("model_capabilities", {})
-        
-        # Check if we need to scan any models
-        models_to_scan = [m for m in models if m not in capabilities_cache]
-        
-        if models_to_scan:
-            logger.info(f"Scanning {len(models_to_scan)} models for capabilities...")
-            # Show progress dialog while scanning
-            capabilities_cache = self._scan_models_with_progress(models, capabilities_cache)
-            
-            # Save updated cache to settings
-            self._save_capabilities_cache(capabilities_cache)
-        
-        # Now populate combo box with cached data
-        for model_name in models:
-            caps = capabilities_cache.get(model_name, {
-                "has_vision": False,
-                "has_tools": False,
-                "context_length": 0,
-                "vram_mb": 0
-            })
-            
-            # Strip maker (parent folder) from display name
-            display_name = model_name.split('/', 1)[-1] if '/' in model_name else model_name
-            
-            # Build display string with capability icons and badges
-            icons = []
-            if caps.get("has_vision"):
-                icons.append("👁️")
-            if caps.get("has_tools"):
-                icons.append("🔧")
-            
-            badges = []
-            if caps.get("context_length", 0) > 0:
-                ctx_k = caps["context_length"] // 1000
-                badges.append(f" [{ctx_k}k]")
-            if caps.get("vram_mb", 0) > 0:
-                vram_gb = caps["vram_mb"] / 1024
-                badges.append(f" [{vram_gb:.1f}GB]")
-            
-            icon_prefix = " ".join(icons) + " " if icons else ""
-            display_text = icon_prefix + display_name + "".join(badges)
-            
-            # Add to combo box (store original full path in userData)
-            self._model_combo.addItem(display_text, userData=model_name)
-            logger.debug(f"Added model: {display_text}")
+        """Populate model combo box with model names and capability badges (fresh scan)."""
+        combo = self._model_combo
+        if combo is None:
+            logger.warning("Model population skipped: model combo is None (settings panel not ready?)")
+            return
+        logger.info(f"Model population starting: opening discovery and scan dialogs; combo id={id(combo)}")
+        self._model_validator.populate_models_with_capabilities(combo)
+        logger.info("Model population completed")
     
     def _scan_models_with_progress(self, models: list[str], existing_cache: dict) -> dict:
-        """Scan models for capabilities with progress dialog.
-        
-        Args:
-            models: List of model paths to scan
-            existing_cache: Existing capabilities cache
-            
-        Returns:
-            Updated capabilities cache
-        """
-        cache = existing_cache.copy()
-        
-        # Create progress dialog
-        progress = QtWidgets.QProgressDialog(
-            "Scanning model capabilities...",
-            "Cancel",
-            0,
-            len(models),
-            self
-        )
-        progress.setWindowTitle("Model Scan")
-        progress.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
-        progress.setMinimumDuration(0)
-        progress.show()
-        
-        for i, model_name in enumerate(models):
-            if progress.wasCanceled():
-                logger.info("Model scan cancelled by user")
-                break
-            
-            progress.setValue(i)
-            progress.setLabelText(f"Scanning {model_name}...")
-            QtWidgets.QApplication.processEvents()  # Keep UI responsive
-            
-            # Skip if already cached
-            if model_name in cache:
-                continue
-            
-            try:
-                model_dir = MODELS_DIR / model_name
-                
-                # Get capabilities (without VRAM measurement for speed)
-                caps = ModelCapabilities.get_capabilities(model_dir, measure_vram=False)
-                
-                # Store in cache
-                cache[model_name] = {
-                    "has_vision": caps["has_vision"],
-                    "has_tools": caps["has_tools"],
-                    "context_length": caps["context_length"],
-                    "vram_mb": caps.get("vram_mb", 0)
-                }
-                
-                logger.debug(f"Scanned {model_name}: vision={caps['has_vision']}, tools={caps['has_tools']}, ctx={caps['context_length']}")
-            
-            except Exception as e:
-                logger.warning(f"Failed to scan {model_name}: {e}")
-                # Add default entry so we don't keep retrying
-                cache[model_name] = {
-                    "has_vision": False,
-                    "has_tools": False,
-                    "context_length": 0,
-                    "vram_mb": 0
-                }
-        
-        progress.setValue(len(models))
-        progress.close()
-        
-        return cache
+        """DEPRECATED: Use ModelValidator.scan_models_with_progress() instead."""
+        return self._model_validator.scan_models_with_progress(models, existing_cache)
     
     def _save_capabilities_cache(self, cache: dict) -> None:
-        """Save capabilities cache to settings.yml.
-        
-        Args:
-            cache: Capabilities cache dict
-        """
-        try:
-            # Update settings in memory
-            settings["model_capabilities"] = cache
-            
-            # Write to file
-            with open(settings_file, 'w') as f:
-                yaml.dump(settings, f, default_flow_style=False, sort_keys=False)
-            
-            logger.info(f"Saved capabilities cache for {len(cache)} models to {settings_file}")
-        except Exception as e:
-            logger.error(f"Failed to save capabilities cache: {e}")
+        """DEPRECATED: Use ModelValidator.save_capabilities_cache() instead."""
+        self._model_validator.save_capabilities_cache(cache)
+
+    def _prune_missing_models(self, discovered_models: list[str], capabilities_cache: dict) -> dict:
+        """DEPRECATED: no-op since caching has been removed."""
+        return capabilities_cache
     
     def _measure_and_cache_vram(self, model_path: str) -> None:
         """Measure VRAM usage of loaded model and update cache.
@@ -1143,33 +882,17 @@ class ChatWindow(QtWidgets.QMainWindow):
         return self._discover_models_static()
 
     def _on_load_model_clicked(self, model_path: Optional[str] = None) -> None:
-        """Load the selected local model."""
+        """Load the selected local model (async heat)."""
         if not model_path and self._model_combo:
             model_path = self._model_combo.currentData() or self._model_combo.currentText() or None
         if model_path:
-            self._load_model(model_path)
+            self._start_async_model_load(model_path)
 
-    def _on_load_lmstudio_clicked(self, model_id: Optional[str] = None) -> None:
-        """Load the selected LM Studio model."""
-        combo = self._settings_panel.lmstudio_panel.model_combo if self._settings_panel else None
-        if not model_id and combo and combo.count() > 0:
-            model_id = combo.currentData() or combo.currentText()
-        if model_id:
-            self._load_lm_studio_model(model_id)
+    # LM Studio methods removed
 
-    def _on_lmstudio_selection_changed(self, index: int) -> None:
-        # Update status to reflect selected LM Studio model
-        combo = self._settings_panel.lmstudio_panel.model_combo if self._settings_panel else None
-        status_label = getattr(self._settings_panel.lmstudio_panel, "status_label", None) if self._settings_panel else None
-        if combo and status_label:
-            current = combo.itemData(index) or combo.itemText(index)
-            status_label.setText(f"Selected: {current}")
+    # LM Studio methods removed
 
-    def _on_lmstudio_ctx_changed(self, value: int) -> None:
-        # LM Studio context change acknowledgement
-        status_label = getattr(self._settings_panel.lmstudio_panel, "status_label", None) if self._settings_panel else None
-        if status_label:
-            status_label.setText(f"Context set to {value}")
+    # LM Studio methods removed
 
     def _is_mcp_server_running(self) -> bool:
         """Check if MCP server process is running.
@@ -1241,68 +964,20 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _fetch_mcp_tools(self) -> Optional[list]:
         """Fetch available tools from the MCP server using MCP protocol.
         
+        Caches tools after initial fetch to avoid losing tool metadata on subsequent
+        fetches (which would create new MCP server processes with empty Tool objects).
+        
         Uses the mcp client library to connect via stdio to the MCP server
         and call the standard tools/list endpoint.
         
         Returns:
-            List of tool definitions from MCP server.
+            List of tool definitions from MCP server (or cached tools).
         """
         if not MCP_SERVER_ENABLED:
             logger.debug("MCP server not available for tool fetching")
             return None
-        
-        try:
-            import asyncio
-            from mcp.client.session import ClientSession
-            from mcp.client.stdio import stdio_client, StdioServerParameters
-            
-            async def get_tools():
-                # Get the MCP server command from settings
-                cmd_parts = MCP_SERVER_COMMAND.split()
 
-                try:
-                    # Create StdioServerParameters; stdio_client will spawn the process
-                    server_params = StdioServerParameters(
-                        command=cmd_parts[0],
-                        args=cmd_parts[1:] if len(cmd_parts) > 1 else [],
-                        cwd=PROJECT_ROOT,
-                    )
-
-                    logger.info(f"Connecting to MCP server via stdio: {MCP_SERVER_COMMAND}")
-                    async with stdio_client(server_params) as (read_stream, write_stream):
-                        async with ClientSession(read_stream, write_stream) as session:
-                            try:
-                                await session.initialize()
-                                tools_response = await session.list_tools()
-                                logger.info(f"MCP list_tools returned {len(tools_response.tools)} tools")
-                                return tools_response.tools
-                            except Exception as list_err:
-                                logger.exception(f"MCP list_tools failed: {list_err}")
-                                raise
-                except Exception as inner_e:
-                    logger.exception(f"Failed to connect to MCP server: {inner_e}")
-                    return None
-            
-            # Run async function in new event loop with proper error handling
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                tools = loop.run_until_complete(get_tools())
-                loop.close()
-                
-                if tools:
-                    logger.info(f"Fetched {len(tools)} tools from MCP server via MCP protocol")
-                    return tools
-                else:
-                    logger.warning("No tools returned from MCP server")
-                    return None
-            except Exception as loop_e:
-                logger.exception(f"Async loop error while fetching tools: {loop_e}")
-                return None
-            
-        except Exception as e:
-            logger.debug(f"Failed to fetch MCP tools via MCP protocol: {e}")
-            return None
+        return self._mcp_manager.fetch_mcp_tools()
 
     def _build_tool_prompt(self, tools: list) -> str:
         """Build a system prompt section with tools using the preamble from settings.yml.
@@ -1316,23 +991,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         Returns:
             Formatted prompt section with tools and instructions
         """
-        if not tools:
-            return ""
-        
-        # Convert to OpenAI format first
-        openai_tools = self._convert_mcp_tools_to_openai_format(tools)
-        if not openai_tools:
-            return ""
-        
-        # Format tools as JSON string
-        tools_json = json.dumps(openai_tools, indent=2)
-        
-        # Use the preamble from settings.yml and replace {tools_json} placeholder
-        tool_prompt = "\n" + TOOL_PREAMBLE.replace("{tools_json}", tools_json)
-        
-        logger.info(f"Built tool prompt for {len(openai_tools)} tools using settings.yml preamble")
-        logger.debug(f"Tool prompt:\n{tool_prompt}")
-        return tool_prompt
+        return self._mcp_manager.build_tool_prompt(tools)
     
     def _format_tools_for_prompt(self, tools: list) -> str:
         """DEPRECATED: Use _build_tool_prompt instead.
@@ -1361,45 +1020,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         Returns:
             List of tools in OpenAI format
         """
-        if not mcp_tools:
-            return []
-        
-        openai_tools = []
-        for tool in mcp_tools:
-            try:
-                # Handle both dict and object formats
-                if isinstance(tool, dict):
-                    # Already a dict from built-in MCP or previous conversion
-                    name = tool.get("name", "")
-                    description = tool.get("description", "")
-                    input_schema = tool.get("inputSchema", {})
-                else:
-                    # MCP ToolDescription object with attributes
-                    name = getattr(tool, "name", "")
-                    description = getattr(tool, "description", "")
-                    input_schema = getattr(tool, "inputSchema", {})
-                
-                tool_def = {
-                    "type": "function",
-                    "function": {
-                        "name": name,
-                        "description": description or "",
-                        "parameters": input_schema
-                    }
-                }
-                openai_tools.append(tool_def)
-                logger.debug(f"Converted tool '{name}' to OpenAI format")
-            except Exception as e:
-                logger.warning(f"Failed to convert tool {tool}: {e}")
-                continue
-        
-        logger.info(f"Converted {len(openai_tools)} MCP tools to OpenAI format")
-        # Log the actual tool definitions being sent (first 5 only)
-        for i, tool in enumerate(openai_tools[:5]):
-            logger.info(f"Tool definition: {json.dumps(tool, indent=2)}")
-        if len(openai_tools) > 5:
-            logger.info(f"... and {len(openai_tools) - 5} more tools")
-        return openai_tools
+        return self._mcp_manager.convert_mcp_tools_to_openai_format(mcp_tools)
 
     def _fetch_and_integrate_tools(self) -> None:
         """Fetch MCP tools and integrate them into the system prompt.
@@ -1416,35 +1037,12 @@ class ChatWindow(QtWidgets.QMainWindow):
         # Fetch external MCP tools
         tools = self._fetch_mcp_tools()
         
-        # Convert Tool objects to dicts if needed
-        if tools and not isinstance(tools[0], dict):
-            tools = [
-                {
-                    "name": getattr(t, "name", ""),
-                    "description": getattr(t, "description", ""),
-                    "inputSchema": getattr(t, "inputSchema", {})
-                }
-                for t in tools
-            ]
-            logger.debug(f"Converted {len(tools)} Tool objects to dict format")
-        
         # Merge with built-in MCP tools if available
         if self._mcp_http_server:
             try:
                 builtin_tools = self._mcp_http_server.get_tools()
                 if builtin_tools:
-                    if tools is None:
-                        tools = []
-                    # Merge without duplicates
-                    existing_names = {t.get("name") for t in tools}
-                    new_tools = []
-                    for bt in builtin_tools:
-                        if bt.get("name") not in existing_names:
-                            tools.append(bt)
-                            new_tools.append(bt)
-                    logger.info(f"Merged {len(new_tools)} built-in MCP tools with {len(existing_names)} external tools")
-                    for nt in new_tools:
-                        logger.debug(f"  + Built-in tool: {nt.get('name')} - {nt.get('description', '')[:80]}")
+                    tools = self._mcp_manager.merge_builtin_tools(tools, builtin_tools)
             except Exception as e:
                 logger.error(f"Failed to merge built-in MCP tools: {e}", exc_info=True)
         
@@ -1453,16 +1051,24 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._messages[0]["content"] = "You are a helpful assistant."
             return
         
+        openai_tools = self._convert_mcp_tools_to_openai_format(tools)
+        if not openai_tools:
+            logger.warning("Tool conversion failed; system prompt unchanged")
+            self._messages[0]["content"] = "You are a helpful assistant."
+            return
+
         # Cache tools for later use
         self._mcp_tools = tools
         
         # Log tool summary before building prompt
         logger.info(f"Final tool list for system prompt: {len(tools)} tools")
         for i, tool in enumerate(tools, 1):
-            logger.debug(f"  {i}. {tool.get('name')} - {tool.get('description', 'no description')[:100]}")
+            name = tool.get('name') if isinstance(tool, dict) else getattr(tool, 'name', 'unknown')
+            desc = tool.get('description', 'no description') if isinstance(tool, dict) else getattr(tool, 'description', 'no description')
+            logger.debug(f"  {i}. {name} - {str(desc)[:100]}")
         
         # Build tool prompt with {tools_json} replaced
-        tool_prompt = self._build_tool_prompt(tools)
+        tool_prompt = self._build_tool_prompt(openai_tools)
         
         # Update system message to include tool information
         full_system_prompt = f"You are a helpful assistant.\n\n{tool_prompt}"
@@ -1485,16 +1091,21 @@ class ChatWindow(QtWidgets.QMainWindow):
         Returns:
             Tuple of (tool_name, arguments_dict) or None if no tool call found
         """
-        # Pattern: [TOOL_REQUEST] followed by JSON dict followed by [END_TOOL_REQUEST]
-        pattern = r"\[TOOL_REQUEST\]\s*(\{.*?\})\s*\[END_TOOL_REQUEST\]"
-        match = re.search(pattern, text, flags=re.DOTALL)
+        # Find [TOOL_REQUEST] and [END_TOOL_REQUEST] markers
+        start_marker = "[TOOL_REQUEST]"
+        end_marker = "[END_TOOL_REQUEST]"
         
-        if not match:
+        start_idx = text.find(start_marker)
+        end_idx = text.find(end_marker)
+        
+        if start_idx == -1 or end_idx == -1 or start_idx >= end_idx:
             logger.debug("No [TOOL_REQUEST] block found in model output")
             return None
         
-        json_str = match.group(1).strip()
-        logger.debug(f"Found TOOL_REQUEST JSON: {json_str}")
+        # Extract content between markers
+        start_idx += len(start_marker)
+        json_str = text[start_idx:end_idx].strip()
+        logger.debug(f"Found TOOL_REQUEST JSON: {json_str[:100]}...")
         
         try:
             tool_call = json.loads(json_str)
@@ -1505,7 +1116,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                 logger.warning("Tool call JSON missing 'name' field")
                 return None
             
-            logger.info(f"Parsed tool call: {tool_name} with arguments {arguments}")
+            logger.info(f"Parsed tool call: {tool_name} with arguments (complex args, {len(str(arguments))} chars)")
             return tool_name, arguments
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse TOOL_REQUEST JSON: {e}")
@@ -1560,41 +1171,104 @@ class ChatWindow(QtWidgets.QMainWindow):
         return result_text
 
     def _execute_tool_call(self, tool_name: str, arguments: dict) -> Optional[str]:
-        """Execute a tool via MCP and return formatted result text."""
+        """Execute a tool via MCP (HTTP or stdio) and return formatted result text.
+        
+        Tries built-in HTTP MCP first, then external stdio MCP.
+        """
+        import time
+        import json
+        
         if not MCP_SERVER_ENABLED:
             logger.warning("MCP server disabled; cannot execute tool")
             return None
 
-        try:
-            import asyncio
-            from mcp.client.session import ClientSession
-            from mcp.client.stdio import stdio_client, StdioServerParameters
+        # Start tool execution block with visual marker
+        start_time = time.time()
+        logger.info("═" * 63)
+        logger.info("[TOOL] ►►► Executing: %s", tool_name)
+        logger.info("[TOOL]     Arguments: %s", json.dumps(arguments or {}, ensure_ascii=False))
+        
+        result = None
+        method_used = None
+        
+        # Try built-in HTTP MCP server first
+        if self._mcp_http_server:
+            logger.debug("[TOOL] Trying built-in HTTP MCP")
+            try:
+                result = self._mcp_http_server.call_tool(tool_name, arguments or {})
+                # Check if result is a successful response (not an error dict)
+                if result and isinstance(result, dict) and result.get("status") == "error":
+                    logger.debug("[TOOL] Built-in MCP returned error: %s", result.get('message'))
+                    result = None  # Force fallback to stdio
+                elif result:
+                    method_used = "HTTP MCP :6821"
+            except Exception as e:
+                logger.debug("[TOOL] Built-in HTTP MCP failed: %s", e)
+                result = None
+        
+        # Fall back to stdio MCP if HTTP didn't work or returned error
+        if not result:
+            logger.debug("[TOOL] Trying stdio MCP")
+            try:
+                import asyncio
+                from mcp.client.session import ClientSession
+                from mcp.client.stdio import stdio_client, StdioServerParameters
 
-            cmd_parts = MCP_SERVER_COMMAND.split()
+                cmd_parts = MCP_SERVER_COMMAND.split()
 
-            async def run_call():
-                server_params = StdioServerParameters(
-                    command=cmd_parts[0],
-                    args=cmd_parts[1:] if len(cmd_parts) > 1 else [],
-                    cwd=PROJECT_ROOT,
-                )
-                logger.info(f"Executing MCP tool '{tool_name}' via stdio")
-                async with stdio_client(server_params) as (read_stream, write_stream):
-                    async with ClientSession(read_stream, write_stream) as session:
-                        await session.initialize()
-                        result = await session.call_tool(tool_name, arguments or {})
-                        return result
+                async def run_call():
+                    server_params = StdioServerParameters(
+                        command=cmd_parts[0],
+                        args=cmd_parts[1:] if len(cmd_parts) > 1 else [],
+                        cwd=PROJECT_ROOT,
+                    )
+                    async with stdio_client(server_params) as (read_stream, write_stream):
+                        async with ClientSession(read_stream, write_stream) as session:
+                            await session.initialize()
+                            result = await session.call_tool(tool_name, arguments or {})
+                            return result
 
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            result = loop.run_until_complete(run_call())
-            loop.close()
-        except Exception as e:
-            logger.error(f"Tool execution failed for {tool_name}: {e}")
-            return None
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                result = loop.run_until_complete(run_call())
+                loop.close()
+                
+                if result:
+                    method_used = "stdio MCP"
+            except Exception as e:
+                logger.error("[TOOL] Stdio MCP failed: %s", e)
+                result = None
+
+        # Log result with visual marker
+        elapsed_ms = (time.time() - start_time) * 1000
+        if result:
+            logger.info("[TOOL] ◄◄◄ Success in %.0fms (via %s)", elapsed_ms, method_used)
+            # Handle CallToolResult objects from MCP (convert to string/dict for logging)
+            try:
+                # Try to extract content from CallToolResult object
+                if hasattr(result, 'content'):
+                    # MCP CallToolResult has content attribute (list of TextContent/etc)
+                    if isinstance(result.content, list) and result.content:
+                        result_text = result.content[0].text if hasattr(result.content[0], 'text') else str(result.content[0])
+                    else:
+                        result_text = str(result.content)
+                    result_str = result_text[:500] if isinstance(result_text, str) else str(result_text)[:500]
+                else:
+                    # Plain dict or other serializable object
+                    result_str = json.dumps(result, ensure_ascii=False)
+                
+                if len(result_str) > 200:
+                    logger.info("[TOOL]     Result: %s...", result_str[:200])
+                else:
+                    logger.info("[TOOL]     Result: %s", result_str)
+            except Exception as e:
+                logger.debug("[TOOL] Error formatting result: %s", e)
+                logger.info("[TOOL]     Result: (unprintable object)")
+        else:
+            logger.warning("[TOOL] ◄◄◄ Failed in %.0fms (no result from any MCP source)", elapsed_ms)
+        logger.info("═" * 63)
 
         if not result:
-            logger.warning(f"Tool '{tool_name}' returned no result")
             return None
 
         try:
@@ -1602,7 +1276,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         except Exception as e:
             logger.warning(f"Could not format tool result for {tool_name}: {e}")
             try:
-                return json.dumps(result.model_dump(), indent=2)
+                # Try to get dict representation
+                if hasattr(result, 'model_dump'):
+                    return json.dumps(result.model_dump(), indent=2)
+                else:
+                    return str(result)
             except Exception:
                 return str(result)
 
@@ -1651,280 +1329,126 @@ class ChatWindow(QtWidgets.QMainWindow):
         if self.automation_mode and self.pending_messages:
             QtCore.QTimer.singleShot(1000, self._process_next_automation_message)
 
-    def _is_llama_server_running(self) -> bool:
-        """Check if llama-server is running on localhost."""
-        try:
-            response = requests.get(f"http://localhost:{LLAMA_SERVER_PORT}/health", timeout=1)
-            return response.status_code == 200
-        except Exception:
-            return False
+    def _apply_load_result(self, result: LoadResult) -> None:
+        model_rel = result.model_rel
+        if not model_rel and result.model_file:
+            try:
+                path_obj = Path(result.model_file)
+                if MODELS_DIR in path_obj.parents:
+                    model_rel = str(path_obj.parent.relative_to(MODELS_DIR))
+            except Exception:
+                model_rel = None
 
-    def _launch_llama_server(self, model_path: str) -> bool:
-        """Launch llama-server with the given model.
-        
-        Args:
-            model_path: Relative path to model from MODELS_DIR
-            
-        Returns:
-            True if successfully launched or already running
-        """
-        if self._is_llama_server_running():
-            logger.info(f"llama-server already running on localhost:{LLAMA_SERVER_PORT}")
-            return True
-
-        full_model_path = MODELS_DIR / model_path
-        gguf_files = sorted(full_model_path.glob("*.gguf"))
-        quantized = [f for f in gguf_files if "Q" in f.name.upper() and "mmproj" not in f.name.lower()]
-        if not quantized:
-            quantized = [f for f in gguf_files if "mmproj" not in f.name.lower()]
-        
-        if not quantized:
-            logger.error(f"No suitable .gguf file found for llama-server in {full_model_path}")
-            return False
-
-        model_file = quantized[0]
-        logger.info(f"Launching llama-server with {model_file.name}...")
-        
-        try:
-            # Launch llama-server in background
-            self._llama_server_process = subprocess.Popen(
-                [
-                    "llama-server",
-                    "-m", str(model_file),
-                    "-ngl", str(GPU_OFFLOAD_LAYERS),  # GPU layers
-                    "-c", "2048",                       # Context
-                    "-p", str(LLAMA_SERVER_PORT)        # Port
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
-            )
-            
-            # Wait for server to start
-            for attempt in range(10):
-                time.sleep(1)
-                if self._is_llama_server_running():
-                    logger.info("llama-server started successfully")
-                    return True
-            
-            logger.error("llama-server failed to start within timeout")
-            return False
-        except Exception as e:
-            logger.exception(f"Failed to launch llama-server: {e}")
-            return False
-    
-    def _load_model_from_full_path(self, full_path: str) -> None:
-        """Load a GGUF model from a full file path.
-        
-        Args:
-            full_path: Full path to a GGUF file, e.g., "D:\\LLM Models\\mradermacher\\gemma-3-27b...\\model.gguf"
-        """
-        logger.info(f"Loading model from full path: {full_path}")
-        model_file = Path(full_path)
-        
-        if not model_file.exists():
-            error_msg = f"Model file not found: {full_path}"
-            logger.error(error_msg)
-            self._set_status(error_msg)
-            return
-        
-        if not model_file.suffix.lower() == ".gguf":
-            error_msg = f"File is not a GGUF model: {full_path}"
-            logger.error(error_msg)
-            self._set_status(error_msg)
-            return
-        
-        logger.info(f"Selected model file: {model_file.name} ({model_file.stat().st_size / (1024**3):.2f} GB)")
-        
-        try:
-            status_msg = f"Loading {model_file.name}..."
-            logger.info(status_msg)
-            self._set_status(status_msg)
-            QtWidgets.QApplication.processEvents()
-
-            logger.debug(f"Attempting to load model with llama-cpp-python: {str(model_file)}")
-            # Determine desired context tokens for this model
-            desired_ctx = self._ctx_spin.value() if self._ctx_spin else DEFAULT_CTX
-            self._model = Llama(
-                model_path=str(model_file),
-                n_gpu_layers=-1,
-                n_ctx=desired_ctx,
-                verbose=False,
-            )
+        if not result.success:
             self._use_llama_server = False
-            
-            success_msg = f"Model loaded (llama-cpp-python): {model_file.name} (ctx {desired_ctx})"
-            logger.info(success_msg)
-            self._set_status(success_msg)
-            self._set_current_model(str(model_file))  # Update current model display
-        except Exception as e:
-            error_msg = f"llama-cpp-python failed: {e}"
-            logger.warning(error_msg)
-            
-            # Fallback: Try llama-server
-            logger.info("Falling back to llama-server...")
-            self._set_status("Model load failed. Trying llama-server...")
-            
-            if self._launch_llama_server(str(model_file)):
-                self._use_llama_server = True
-                success_msg = f"Model loaded (llama-server): {model_file.name}"
-                logger.info(success_msg)
-                self._set_status(success_msg)
-                self._set_current_model(str(model_file))  # Update current model display
-            else:
-                error_msg = f"Both llama-cpp-python and llama-server failed to load model"
-                logger.error(error_msg)
-                self._set_status(error_msg)
-
-    def _load_model(self, model_path: str) -> None:
-        """Load a GGUF model from the models directory.
-        
-        Args:
-            model_path: Relative path from MODELS_DIR, e.g., "mradermacher/Qwen3-VL-8B-..."
-        """
-        logger.info(f"Loading model: {model_path}")
-        full_model_dir = MODELS_DIR / model_path
-        logger.debug(f"Full model directory: {full_model_dir}")
-        logger.debug(f"Directory exists: {full_model_dir.exists()}")
-        
-        if not full_model_dir.exists():
-            error_msg = f"Model directory not found: {full_model_dir}"
-            logger.error(error_msg)
-            self._set_status(error_msg)
+            self._model = None
+            self._set_status(result.message)
+            if self._send_btn:
+                self._send_btn.setEnabled(False)
+                self._send_btn.setText("Select a model to begin")
+            if self.automation_mode:
+                # Stop automation cleanly when we cannot load the model
+                self.pending_messages = []
+                self.processing_message = False
+                QtCore.QTimer.singleShot(0, self.close)
             return
 
-        # Find the first .gguf file (prefer quantized versions like Q4_K_S)
-        gguf_files = sorted(full_model_dir.glob("*.gguf"))
-        logger.debug(f"Found {len(gguf_files)} .gguf files: {[f.name for f in gguf_files]}")
-        
-        if not gguf_files:
-            error_msg = f"No .gguf files found in {full_model_dir}"
-            logger.error(error_msg)
-            self._set_status(error_msg)
-            return
+        self._use_llama_server = result.used_llama_server
+        self._model = result.model
+        display_target = model_rel or (str(result.model_file) if result.model_file else None)
 
-        # Prefer quantized versions over mmproj (exclude mmproj files)
-        quantized = [f for f in gguf_files if "Q" in f.name.upper() and "mmproj" not in f.name.lower()]
-        if not quantized:
-            # If no quantized version, try to skip mmproj and use whatever is available
-            quantized = [f for f in gguf_files if "mmproj" not in f.name.lower()]
-        model_file = quantized[0] if quantized else gguf_files[0]
-        logger.info(f"Selected model file: {model_file.name} ({model_file.stat().st_size / (1024**3):.2f} GB)")
+        if display_target:
+            self._set_current_model(display_target)
 
+        if model_rel:
+            self._model_validator.set_last_model_name(model_rel)
+            if not result.used_llama_server:
+                self._measure_and_cache_vram(model_rel)
+
+        self._set_status(result.message)
+        if self._send_btn:
+            self._send_btn.setEnabled(True)
+            self._send_btn.setText("Send (Ctrl+Enter)")
+
+    # Mode switching removed (LM Studio feature deprecated)
+
+    # ----- Startup model heating -----
+    def _init_model_on_startup(self) -> None:
+        """Initialize model state: heat last model asynchronously, or disable chat until selection."""
         try:
-            status_msg = f"Loading {model_file.name}..."
-            logger.info(status_msg)
-            self._set_status(status_msg)
-            QtWidgets.QApplication.processEvents()
-
-            logger.debug(f"Attempting to load model with llama-cpp-python: {str(model_file)}")
-            # Determine desired context tokens for this model
-            desired_ctx = self._ctx_spin.value() if self._ctx_spin else DEFAULT_CTX
-            self._model = Llama(
-                model_path=str(model_file),
-                n_gpu_layers=-1,
-                n_ctx=desired_ctx,
-                verbose=False,
-            )
-            self._use_llama_server = False
-            
-            # Measure and cache VRAM usage
-            self._measure_and_cache_vram(model_path)
-            
-            success_msg = f"Model loaded (llama-cpp-python): {model_path.split(chr(92))[-1]} (ctx {desired_ctx})"
-            logger.info(success_msg)
-            self._set_status(success_msg)
-            self._set_current_model(model_path)  # Update current model display
+            # Determine last model preference or CLI override
+            last_model = self._model_validator.get_last_model_name()
+            model_to_use = self.selected_model or last_model
+            if model_to_use:
+                # Select in combo if present
+                if self._model_combo:
+                    idx = -1
+                    for i in range(self._model_combo.count()):
+                        if self._model_combo.itemData(i) == model_to_use:
+                            idx = i
+                            break
+                    if idx >= 0:
+                        self._model_combo.setCurrentIndex(idx)
+                # Disable chat and start async load/heat
+                if self._send_btn:
+                    self._send_btn.setEnabled(False)
+                    self._send_btn.setText("Warming model...")
+                self._start_async_model_load(model_to_use)
+            else:
+                # No last model; keep chat disabled until user selects and heats
+                logger.info("No last_model in settings; waiting for user to select a model")
+                if self._send_btn:
+                    self._send_btn.setEnabled(False)
+                    self._send_btn.setText("Select a model to begin")
+                self._set_status("Select a model to begin")
         except Exception as e:
-            error_msg = f"llama-cpp-python failed: {e}"
-            logger.warning(error_msg)
-            
-            # Fallback: Try llama-server
-            logger.info("Falling back to llama-server...")
-            self._set_status("Model load failed. Trying llama-server...")
-            
-            if self._launch_llama_server(model_path):
-                self._use_llama_server = True
-                success_msg = f"Model loaded (llama-server): {model_path.split(chr(92))[-1]}"
-                logger.info(success_msg)
-                self._set_status(success_msg)
-                self._set_current_model(model_path)  # Update current model display
-            else:
-                error_msg = f"Both llama-cpp-python and llama-server failed to load model"
-                logger.error(error_msg)
-                self._set_status(error_msg)
+            logger.error(f"_init_model_on_startup error: {e}")
 
-    def _load_default_model(self) -> None:
-        """Load the default model on startup in a non-blocking way.
-        
-        Supports both relative model paths (e.g., "mradermacher/Huihui-LFM2-2.6B-Exp-abliterated-GGUF")
-        and full file paths to GGUF files (e.g., "D:\\LLM Models\\...\\model.gguf").
-        """
-        # Use selected_model if provided via command line, otherwise use DEFAULT_MODEL
-        model_to_load = self.selected_model if self.selected_model else DEFAULT_MODEL
-        logger.info(f"Loading default model: {model_to_load}")
-        
-        # Check if this is a full file path (contains .gguf or looks like a full path)
-        is_full_path = ".gguf" in model_to_load.lower() or ":\\" in model_to_load or model_to_load.startswith("/")
-        
-        if not is_full_path and self._model_combo:
-            # Find the model by userData (original path) since display text now has badges
-            idx = -1
-            for i in range(self._model_combo.count()):
-                if self._model_combo.itemData(i) == model_to_load:
-                    idx = i
-                    break
-            
-            # If not found by userData, try text match (for backward compatibility)
-            if idx < 0:
-                idx = self._model_combo.findText(model_to_load)
-            
-            if idx >= 0:
-                logger.debug(f"Found model at index {idx}")
-                self._model_combo.setCurrentIndex(idx)
-            else:
-                logger.warning(f"Model '{model_to_load}' not found in combo box")
-                logger.debug(f"Available models: {[self._model_combo.itemText(i) for i in range(self._model_combo.count())]}")
-        
-        self._set_status("Loading default model...")
-        if is_full_path:
-            QtCore.QTimer.singleShot(500, lambda: self._load_model_from_full_path(model_to_load))
-        else:
-            QtCore.QTimer.singleShot(500, lambda: self._load_model(model_to_load))
+    def _start_async_model_load(self, model_path: str) -> None:
+        """Begin asynchronous model load using LlamaModelLoader (handles full or relative paths)."""
+        try:
+            desired_ctx = self._ctx_spin.value() if self._ctx_spin else DEFAULT_CTX
+            if self._send_btn:
+                self._send_btn.setEnabled(False)
+                self._send_btn.setText("Warming model...")
 
-    def _on_mode_changed(self, mode: str) -> None:
-        """Handle mode change - refresh model list from appropriate source."""
-        logger.info(f"Mode changed to: {mode}")
-        if mode == "lm_studio":
-            # Store current local model before switching to LM Studio
-            if self._model_combo and self._model_combo.count() > 0:
-                self._last_local_model = self._model_combo.currentData() or self._model_combo.currentText()
-                logger.debug(f"Stored local model for later: {self._last_local_model}")
-            
-            self._load_lm_studio_models()
-            self._fetch_lm_studio_current_model()
-        else:
-            # Switching back to Local mode
-            self._populate_models_with_capabilities()
-            
-            # Restore the last selected local model if available
-            if self._last_local_model and self._model_combo:
-                # Find and select the previously selected model
-                for i in range(self._model_combo.count()):
-                    if self._model_combo.itemData(i) == self._last_local_model:
-                        self._model_combo.setCurrentIndex(i)
-                        logger.info(f"Restored local model: {self._last_local_model}")
-                        break
-            
-            # Update current model display for local mode
-            if self._model_combo and self._model_combo.count() > 0:
-                # Use userData which has the full path (maker/model-name), not just display text
-                current_path = self._model_combo.currentData()
-                if current_path:
-                    self._set_current_model(current_path)
-                else:
-                    # Fallback to display text if no userData
-                    self._set_current_model(self._model_combo.currentText())
+            # Clean up any existing worker/thread
+            if self._load_thread:
+                try:
+                    self._load_thread.quit()
+                    self._load_thread.wait(500)
+                except Exception:
+                    pass
+                self._load_thread = None
+                self._load_worker = None
+
+            self._load_thread = QtCore.QThread()
+            self._load_worker = ModelLoadWorker(self._model_loader, model_path, desired_ctx)
+            self._load_worker.moveToThread(self._load_thread)
+            self._load_thread.started.connect(self._load_worker.run)
+            self._load_worker.finished.connect(self._on_model_loaded)
+            self._load_worker.finished.connect(self._load_thread.quit)
+            self._load_thread.finished.connect(self._load_thread.deleteLater)
+            self._load_thread.start()
+            self._set_status(f"Warming {Path(model_path).name}...")
+        except Exception as e:
+            logger.error(f"_start_async_model_load error: {e}")
+
+    def _on_model_loaded(self, result: LoadResult) -> None:
+        """Handle completion of async model loading (llama-server)."""
+        try:
+            self._apply_load_result(result)
+        finally:
+            try:
+                if self._load_worker:
+                    self._load_worker.deleteLater()
+                if self._load_thread and self._load_thread.isRunning():
+                    self._load_thread.quit()
+                    self._load_thread.wait(2000)
+            except Exception:
+                pass
+            self._load_thread = None
+            self._load_worker = None
 
     def _load_lm_studio_models(self) -> None:
         """Fetch available models from LM Studio REST API."""
@@ -1966,88 +1490,12 @@ class ChatWindow(QtWidgets.QMainWindow):
                 if lm_combo.count() > 0:
                     lm_combo.setCurrentIndex(0)
         
-        except requests.exceptions.ConnectionError:
-            logger.error(f"Could not connect to LM Studio at 127.0.0.1:{lm_studio_port}")
-            if self._settings_panel and getattr(self._settings_panel.lmstudio_panel, "status_label", None):
-                self._settings_panel.lmstudio_panel.status_label.setText("Error: Could not connect to LM Studio (is it running?)")
-        except Exception as e:
-            logger.error(f"Error fetching models from LM Studio: {e}")
-            if self._settings_panel and getattr(self._settings_panel.lmstudio_panel, "status_label", None):
-                self._settings_panel.lmstudio_panel.status_label.setText(f"Error loading LM Studio models: {e}")
+        except Exception:
+            pass
     
-    def _load_lm_studio_model(self, model_id: str) -> None:
-        """Load a model in LM Studio by selecting it.
-        
-        LM Studio doesn't have an explicit load endpoint. Instead, we:
-        1. Make a test API call to the /api/v0/models/{model} endpoint to verify it exists
-        2. Update the UI to show the selected model
-        3. When the user sends a message, LM Studio will load the model automatically
-        """
-        try:
-            lm_studio_port = settings.get("lm_studio_port", 11013)
-            # Check if the model exists by fetching its info
-            url = f"http://127.0.0.1:{lm_studio_port}/api/v0/models/{model_id}"
-            
-            logger.info(f"Verifying model exists in LM Studio: {url}")
-            response = requests.get(url, timeout=5)
-            response.raise_for_status()
-            
-            model_info = response.json()
-            state = model_info.get("state", "unknown")
-            logger.info(f"Model {model_id} state: {state}")
-            
-            self._set_current_model(model_id)
-            lm_status = getattr(self._settings_panel.lmstudio_panel, "status_label", None) if self._settings_panel else None
-            if lm_status:
-                if state == "loaded":
-                    lm_status.setText(f"✓ {model_id} is loaded in LM Studio")
-                else:
-                    lm_status.setText(f"Selected {model_id} (will load when used)")
-        
-        except requests.exceptions.ConnectionError:
-            logger.error(f"Could not connect to LM Studio at 127.0.0.1:{lm_studio_port}")
-            if self._settings_panel and getattr(self._settings_panel.lmstudio_panel, "status_label", None):
-                self._settings_panel.lmstudio_panel.status_label.setText("Error: Could not connect to LM Studio (is it running?)")
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"Model {model_id} not found or error: {e}")
-            if self._settings_panel and getattr(self._settings_panel.lmstudio_panel, "status_label", None):
-                self._settings_panel.lmstudio_panel.status_label.setText(f"Error: Model {model_id} not found in LM Studio")
-        except Exception as e:
-            logger.error(f"Error selecting model in LM Studio: {e}")
-            if self._settings_panel and getattr(self._settings_panel.lmstudio_panel, "status_label", None):
-                self._settings_panel.lmstudio_panel.status_label.setText(f"Error selecting model: {e}")
+    # LM Studio feature removed
     
-    def _fetch_lm_studio_current_model(self) -> None:
-        """Fetch the currently loaded model from LM Studio."""
-        try:
-            lm_studio_port = settings.get("lm_studio_port", 11013)
-            # Use /api/v0/models endpoint to check which model is loaded
-            url = f"http://127.0.0.1:{lm_studio_port}/api/v0/models"
-            
-            logger.info(f"Fetching current model from LM Studio: {url}")
-            response = requests.get(url, timeout=5)
-            response.raise_for_status()
-            
-            data = response.json()
-            models = data.get("data", [])
-            
-            if models:
-                # Find the loaded model
-                loaded_models = [m for m in models if m.get("state") == "loaded"]
-                if loaded_models:
-                    current_model = loaded_models[0].get("id", "unknown")
-                else:
-                    # If no model is loaded, show the first one
-                    current_model = models[0].get("id", "unknown")
-                self._set_current_model(current_model)
-                logger.info(f"Current LM Studio model: {current_model}")
-            else:
-                logger.warning("No models returned from LM Studio")
-                self._set_current_model("LM Studio (no model loaded)")
-        
-        except Exception as e:
-            logger.warning(f"Could not fetch current model from LM Studio: {e}")
-            self._set_current_model("LM Studio (connection error)")
+    # LM Studio feature removed
     
     def _set_current_model(self, model_name: str) -> None:
         """Update the display of the currently loaded model."""
@@ -2065,35 +1513,27 @@ class ChatWindow(QtWidgets.QMainWindow):
         return
 
     def _on_model_selection_changed(self, index: int) -> None:
-        """Update context spin to override or default when model selection changes."""
-        if self._ctx_spin is None or self._model_combo is None:
+        """Update context spin to default when model selection changes (no per-model overrides)."""
+        if self._ctx_spin is None:
             return
-        model_path = self._model_combo.itemData(index) or self._model_combo.itemText(index)
-        ctx = int(MODEL_CTX_OVERRIDES.get(model_path, DEFAULT_CTX))
-        self._ctx_spin.setValue(ctx)
-        
-        self._set_status(f"Model selected. Context: {ctx} tokens")
+        self._ctx_spin.setValue(DEFAULT_CTX)
+        self._set_status(f"Model selected. Context: {DEFAULT_CTX} tokens")
 
     def _save_settings(self) -> None:
-        """Persist current settings to YAML file."""
+        """Persist current settings to YAML file (default ctx only)."""
         try:
-            # Update runtime settings dict
             settings["default_ctx"] = DEFAULT_CTX
-            settings["model_ctx_overrides"] = MODEL_CTX_OVERRIDES
             with open(settings_file, 'w', encoding='utf-8') as f:
                 yaml.safe_dump(settings, f, sort_keys=False, allow_unicode=True)
-            logger.info("Settings saved with updated context overrides")
+            logger.info("Settings saved (default_ctx updated)")
         except Exception as e:
             logger.error(f"Failed to save settings: {e}")
 
     def _on_ctx_changed(self, value: int) -> None:
-        """When user changes context tokens, persist per-model override to settings."""
-        if self._model_combo is None:
-            return
-        index = self._model_combo.currentIndex()
-        model_path = self._model_combo.itemData(index) or self._model_combo.itemText(index)
-        MODEL_CTX_OVERRIDES[model_path] = int(value)
-        logger.info(f"Context override set for {model_path}: {value}")
+        """Persist new default context length (no per-model overrides)."""
+        global DEFAULT_CTX
+        DEFAULT_CTX = int(value)
+        logger.info(f"Default context set: {value}")
         self._save_settings()
 
     def _on_send_message(self) -> None:
@@ -2124,8 +1564,8 @@ class ChatWindow(QtWidgets.QMainWindow):
         else:
             logger.info(f"User message: {user_input}")
 
-        # Add user message to history and messages
-        self._append_to_history(user_input, message_type="user")
+        # Add user message to history and messages (include thumbnails if any)
+        self._append_to_history(user_input, message_type="user", image_paths=attachments)
         # Store attachments metadata alongside user message for future vision/tool use
         user_entry: dict = {"role": "user", "content": user_input}
         if attachments:
@@ -2147,6 +1587,45 @@ class ChatWindow(QtWidgets.QMainWindow):
         # Start chat worker thread
         self._start_chat_completion()
 
+    def _encode_image_to_data_url(self, path: str) -> Optional[str]:
+        """Convert an image file into a data URL for llama-cpp vision input."""
+        try:
+            img_path = Path(path)
+            if not img_path.exists():
+                logger.warning(f"Attachment not found, skipping: {path}")
+                return None
+
+            mime_type, _ = mimetypes.guess_type(img_path.name)
+            mime_type = mime_type or "image/png"
+
+            with open(img_path, "rb") as f:
+                b64_data = base64.b64encode(f.read()).decode("utf-8")
+
+            return f"data:{mime_type};base64,{b64_data}"
+        except Exception as e:
+            logger.error(f"Failed to encode image {path}: {e}")
+            return None
+
+    def _prepare_messages_for_llama(self, messages: list[dict]) -> list[dict]:
+        """Return messages formatted for llama-cpp, attaching images as data URLs when present."""
+        prepared: list[dict] = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            images = msg.get("images") or []
+
+            if images:
+                parts = [{"type": "text", "text": str(content)}]
+                for img_path in images[:3]:
+                    data_url = self._encode_image_to_data_url(img_path)
+                    if data_url:
+                        parts.append({"type": "image_url", "image_url": {"url": data_url}})
+                prepared.append({"role": role, "content": parts})
+            else:
+                prepared.append({"role": role, "content": content})
+
+        return prepared
+
     def _start_chat_completion(self) -> None:
         """Start the chat completion in a worker thread."""
         if not self._model:
@@ -2166,17 +1645,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         # Fetch MCP tools (external only) and merge with built-in if available
         mcp_tools = self._fetch_mcp_tools()
         
-        # Merge built-in tools if available
         if self._mcp_http_server:
             try:
                 builtin_tools = self._mcp_http_server.get_tools()
+                mcp_tools = self._mcp_manager.merge_builtin_tools(mcp_tools, builtin_tools)
                 if builtin_tools:
-                    if mcp_tools is None:
-                        mcp_tools = []
-                    existing_names = {t.get("name") for t in mcp_tools}
-                    for bt in builtin_tools:
-                        if bt.get("name") not in existing_names:
-                            mcp_tools.append(bt)
                     logger.debug(f"Merged {len(builtin_tools)} built-in tools for this chat completion")
             except Exception as e:
                 logger.error(f"Failed to merge built-in tools in chat completion: {e}")
@@ -2184,9 +1657,14 @@ class ChatWindow(QtWidgets.QMainWindow):
         if mcp_tools:
             logger.info(f"Chat completion: {len(mcp_tools)} tools available (including built-in)")
             for i, tool in enumerate(mcp_tools, 1):
-                logger.debug(f"  {i}. {tool.get('name')} - {tool.get('description', '')[:80]}")
+                name = tool.get('name') if isinstance(tool, dict) else getattr(tool, 'name', 'unknown')
+                desc = tool.get('description', '') if isinstance(tool, dict) else getattr(tool, 'description', '')
+                logger.debug(f"  {i}. {name} - {str(desc)[:80]}")
             
-            tool_prompt = self._build_tool_prompt(mcp_tools)
+            # Convert to OpenAI format
+            tool_list = self._convert_mcp_tools_to_openai_format(mcp_tools)
+            
+            tool_prompt = self._build_tool_prompt(tool_list)
             if tool_prompt:
                 # Inject into system message
                 if self._messages[0]["role"] == "system":
@@ -2195,7 +1673,7 @@ class ChatWindow(QtWidgets.QMainWindow):
                 else:
                     # Shouldn't happen, but handle gracefully
                     logger.warning("First message is not system message, skipping tool injection")
-                logger.info(f"Injected {len(mcp_tools)} tools into system prompt for this completion")
+                logger.info(f"Injected {len(tool_list)} tools into system prompt for this completion")
         else:
             logger.debug("No tools available for this chat completion")
         
@@ -2205,8 +1683,11 @@ class ChatWindow(QtWidgets.QMainWindow):
         # Log the full system prompt before sending to model
         logger.debug(f"=== SYSTEM MESSAGE FOR THIS COMPLETION ===\n{self._messages[0]['content']}\n=== END SYSTEM MESSAGE ===")
 
+        # Build llama-cpp friendly payload (attach images as data URLs)
+        model_messages = self._prepare_messages_for_llama(self._messages)
+
         # Create and move worker to thread (no tools parameter)
-        self._chat_worker = ChatWorker(self._model, self._messages)
+        self._chat_worker = ChatWorker(self._model, model_messages)
         self._chat_thread = QtCore.QThread()
         self._chat_worker.moveToThread(self._chat_thread)
         self._streaming_response = ""  # Buffer for collecting response chunks
@@ -2304,7 +1785,8 @@ class ChatWindow(QtWidgets.QMainWindow):
             
             # Run model again with tool results in context
             logger.info(f"[Tool Loop] Re-running model with tool results...")
-            self._chat_worker = ChatWorker(self._model, self._messages)
+            model_messages = self._prepare_messages_for_llama(self._messages)
+            self._chat_worker = ChatWorker(self._model, model_messages)
             self._chat_thread = QtCore.QThread()
             self._chat_worker.moveToThread(self._chat_thread)
             self._streaming_response = ""
@@ -2495,7 +1977,7 @@ class ChatWindow(QtWidgets.QMainWindow):
             logger.error(f"Exiting automation mode due to error: {error}")
             QtCore.QTimer.singleShot(1000, self.close)
 
-    def _append_to_history(self, text: str, append_only: bool = False, message_type: str = "system", tool_response: Optional[dict] = None) -> None:
+    def _append_to_history(self, text: str, append_only: bool = False, message_type: str = "system", tool_response: Optional[dict] = None, image_paths: Optional[list[str]] = None) -> None:
         """Append text to the history widget.
         
         Args:
@@ -2503,28 +1985,53 @@ class ChatWindow(QtWidgets.QMainWindow):
             append_only: If True, append without styling (for streaming)
             message_type: Type of message - user, assistant, system, tool, tool_response, error
             tool_response: Optional dict with tool response data (name, arguments, result)
+            image_paths: Optional list of attachments to show in the bubble
         """
         if self._chat_panel:
-            self._chat_panel.append_to_history(text, append_only, message_type, tool_response)
+            self._chat_panel.append_to_history(text, append_only, message_type, tool_response, image_paths)
 
     def _load_input_file(self, file_path: str) -> list[dict]:
-        """Load messages from a file. Each line is a message, special marker 'EXIT' triggers shutdown."""
+        """Load messages from a file. Each line is a message, special marker 'EXIT' triggers shutdown.
+        
+        First line can be an image file path - if it is, the next line becomes the prompt (with image attached).
+        """
         messages = []
+        first_line_image = None
+        
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
-                for line_num, line in enumerate(f, 1):
-                    line = line.rstrip('\n')
-                    if not line or line.startswith('#'):
-                        # Skip empty lines and comments
-                        continue
-                    
-                    # Check for exit marker
-                    if line.upper() in ['EXIT', '#EXIT', 'QUIT', '#QUIT']:
-                        messages.append({'type': 'exit', 'content': ''})
-                        logger.info(f"Found exit marker at line {line_num}")
+                lines = [line.rstrip('\n') for line in f]
+            
+            # Check if first line is an image file path
+            if lines and not lines[0].startswith('#'):
+                potential_image = lines[0].strip()
+                if potential_image and Path(potential_image).exists():
+                    # Check if it's an image by extension
+                    ext = Path(potential_image).suffix.lower()
+                    if ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']:
+                        first_line_image = potential_image
+                        logger.info(f"First line is an image: {first_line_image}")
+                        lines = lines[1:]  # Skip the image path line
+            
+            for line_num, line in enumerate(lines, 1):
+                if not line or line.startswith('#'):
+                    # Skip empty lines and comments
+                    continue
+                
+                # Check for exit marker
+                if line.upper() in ['EXIT', '#EXIT', 'QUIT', '#QUIT']:
+                    messages.append({'type': 'exit', 'content': ''})
+                    logger.info(f"Found exit marker at line {line_num}")
+                else:
+                    msg = {'type': 'message', 'content': line}
+                    # Attach image to first message if present
+                    if first_line_image and len(messages) == 0:
+                        msg['images'] = [first_line_image]
+                        logger.info(f"Loaded message 1 with image: {line[:50]}... (image: {first_line_image})")
                     else:
-                        messages.append({'type': 'message', 'content': line})
-                        logger.info(f"Loaded message {len(messages)}: {line[:50]}...")
+                        logger.info(f"Loaded message {len(messages) + 1}: {line[:50]}...")
+                    messages.append(msg)
+                    
         except FileNotFoundError:
             logger.error(f"Input file not found: {file_path}")
             sys.exit(1)
@@ -2557,8 +2064,17 @@ class ChatWindow(QtWidgets.QMainWindow):
         
         # Send the message
         message_text = next_item['content']
-        logger.info(f"Automation: sending message: {message_text[:50]}...")
+        images = next_item.get('images', [])
+        
+        if images:
+            logger.info(f"Automation: sending message with {len(images)} image(s): {message_text[:50]}...")
+        else:
+            logger.info(f"Automation: sending message: {message_text[:50]}...")
+        
         if self._chat_panel:
+            # Set attachments first if present
+            if images:
+                self._chat_panel.add_images(images)
             self._chat_panel.set_input_text(message_text)
         self.processing_message = True
         
@@ -2568,17 +2084,81 @@ class ChatWindow(QtWidgets.QMainWindow):
 
     def _schedule_shutdown(self) -> None:
         """Schedule application shutdown after a brief delay to ensure logs are flushed."""
+        # Capture screenshot before shutting down (automation exit)
+        self._capture_screenshot()
+        self._capture_card_svgs()
         QtCore.QTimer.singleShot(2000, self.close)
 
     
+    def _capture_screenshot(self) -> None:
+        """Capture full window screenshot and save with session timestamp."""
+        try:
+            # Grab the entire main window
+            pixmap = self.grab()
+            
+            # Save to logs folder with session timestamp
+            success = pixmap.save(str(self.session_screenshot_file))
+            if success:
+                logger.info(f"Screenshot saved: {self.session_screenshot_file}")
+            else:
+                logger.warning(f"Failed to save screenshot to {self.session_screenshot_file}")
+        except Exception as e:
+            logger.error(f"Error capturing screenshot: {e}")
+    
+    def _capture_card_svgs(self) -> None:
+        """Export any SVG content from the Cards panel as PNG images."""
+        if not self._cards_panel:
+            return
+        
+        try:
+            # Get the card widget from the panel
+            if hasattr(self._cards_panel, '_card_svg'):
+                card = self._cards_panel._card_svg
+                
+                if not card or not hasattr(card, 'grab'):
+                    logger.debug("No card widget to export")
+                    return
+                
+                # Grab the card widget
+                pixmap = card.grab()
+                
+                # Generate filename with card index
+                log_name = self.session_screenshot_file.stem  # e.g., session_2026-01-18_22-05-20
+                card_file = self.session_screenshot_file.parent / f"{log_name}_cardsvg01.png"
+                
+                success = pixmap.save(str(card_file))
+                if success:
+                    logger.info(f"Card exported: {card_file}")
+                else:
+                    logger.warning(f"Failed to save card to {card_file}")
+            else:
+                logger.debug("CardsPanel has no _card_svg widget")
+        
+        except Exception as e:
+            logger.error(f"Error capturing card SVGs: {e}")
+    
     def closeEvent(self, event):
         """Handle window close, ensuring proper cleanup."""
+        # Capture screenshot and card SVGs before closing
+        self._capture_screenshot()
+        self._capture_card_svgs()
+        
         if self._hwinfo_panel:
             self._hwinfo_panel.stop_monitoring()
         
         if self._chat_thread and self._chat_thread.isRunning():
             self._chat_thread.quit()
             self._chat_thread.wait()
+
+        # Ensure any in-flight model load thread is stopped before teardown
+        if self._load_thread and self._load_thread.isRunning():
+            try:
+                self._load_thread.quit()
+                self._load_thread.wait(2000)
+            except Exception:
+                pass
+        self._load_thread = None
+        self._load_worker = None
         
         if self._mcp_server_process and self._mcp_server_process.poll() is None:
             self._mcp_server_process.terminate()
@@ -2586,13 +2166,9 @@ class ChatWindow(QtWidgets.QMainWindow):
                 self._mcp_server_process.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 self._mcp_server_process.kill()
-        
-        if self._llama_server_process and self._llama_server_process.poll() is None:
-            self._llama_server_process.terminate()
-            try:
-                self._llama_server_process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                self._llama_server_process.kill()
+
+        if hasattr(self, "_model_loader"):
+            self._model_loader.stop_llama_server()
         
         logger.info("Application closing")
         event.accept()
