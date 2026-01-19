@@ -30,17 +30,20 @@ class SVGLayoutStudioMCP:
     def __init__(
         self,
         ui_display_svg: Callable[[str], None],
-        rules_path: Path,
+        ui_create_card: Optional[Callable[[str], Any]] = None,
+        rules_path: Path = None,
         host: str = "127.0.0.1",
         port: int = 6821,
     ) -> None:
         self._ui_display_svg = ui_display_svg
+        self._ui_create_card = ui_create_card  # Callback to create CardSVG widget
         self._rules_path = rules_path
         self._host = host
         self._port = port
         self._server: Optional[FastMCP] = None
         self._thread: Optional[threading.Thread] = None
         self._tools_cache: Optional[List[Dict[str, Any]]] = None
+        self._artboards: Dict[str, Any] = {}  # Maps artboard_guid → CardSVG widget
 
     def _load_rules(self) -> dict:
         try:
@@ -55,7 +58,7 @@ class SVGLayoutStudioMCP:
         return {
             "name": "svg-layout-studio",
             "type": "builtin",
-            "url": f"http://{self._host}:{self._port}/sse",
+            "url": f"http://{self._host}:{self._port}",
             "description": "Built-in: Generate SVG page layouts",
         }
 
@@ -145,6 +148,17 @@ class SVGLayoutStudioMCP:
                         width, height = 1000, 1400
                 
                 artboard_guid = str(uuid.uuid4())
+                
+                # Create CardSVG widget if callback is provided
+                card_widget = None
+                if self._ui_create_card:
+                    try:
+                        card_widget = self._ui_create_card(f"Artboard {orient.title()}")
+                        self._artboards[artboard_guid] = card_widget
+                        logger.info(f"Created CardSVG for artboard {artboard_guid}")
+                    except Exception as e:
+                        logger.error(f"Failed to create card widget: {e}")
+                
                 rules_json = self._load_rules()
                 return {
                     "artboard_guid": artboard_guid,
@@ -163,7 +177,19 @@ class SVGLayoutStudioMCP:
                     return {"status": "error", "message": "Missing artboard_guid or svg"}
                 
                 try:
-                    self._ui_display_svg(svg)
+                    # If we have the card widget, load SVG directly into it
+                    if artboard_guid in self._artboards:
+                        card_widget = self._artboards[artboard_guid]
+                        if hasattr(card_widget, 'load_svg_content'):
+                            card_widget.load_svg_content(svg)
+                            logger.info(f"Rendered SVG to card {artboard_guid}")
+                        else:
+                            # Fallback to display callback
+                            self._ui_display_svg(svg)
+                    else:
+                        # No card found; use fallback display
+                        self._ui_display_svg(svg)
+                    
                     return {
                         "status": "ok",
                         "artboard_guid": artboard_guid,
@@ -223,6 +249,16 @@ class SVGLayoutStudioMCP:
                     width, height = 1000, 1400
 
             artboard_guid = str(uuid.uuid4())
+            
+            # Create CardSVG widget if callback is provided
+            if self._ui_create_card:
+                try:
+                    card_widget = self._ui_create_card(f"Artboard {orient.title()}")
+                    self._artboards[artboard_guid] = card_widget
+                    logger.info(f"Created CardSVG for artboard {artboard_guid}")
+                except Exception as e:
+                    logger.error(f"Failed to create card widget: {e}")
+            
             return {
                 "artboard_guid": artboard_guid,
                 "width": width,
@@ -236,7 +272,19 @@ class SVGLayoutStudioMCP:
         def render_svg(artboard_guid: str, svg: str) -> dict:
             """Render an SVG to the UI cards panel and return status."""
             try:
-                self._ui_display_svg(svg)
+                # If we have the card widget, load SVG directly into it
+                if artboard_guid in self._artboards:
+                    card_widget = self._artboards[artboard_guid]
+                    if hasattr(card_widget, 'load_svg_content'):
+                        card_widget.load_svg_content(svg)
+                        logger.info(f"Rendered SVG to card {artboard_guid}")
+                    else:
+                        # Fallback to display callback
+                        self._ui_display_svg(svg)
+                else:
+                    # No card found; use fallback display
+                    self._ui_display_svg(svg)
+                
                 return {
                     "status": "ok",
                     "artboard_guid": artboard_guid,
@@ -271,9 +319,10 @@ class SVGLayoutStudioMCP:
                 logger.info(
                     f"Starting built-in MCP HTTP server (svg-layout-studio) on http://{self._host}:{self._port}"
                 )
-                server.run(transport="sse", host=self._host, port=self._port)
+                # Let FastMCP's HTTP transport handle everything
+                server.run(transport="http", host=self._host, port=self._port)
             except Exception as e:
-                logger.error(f"MCP HTTP server stopped: {e}")
+                logger.error(f"MCP HTTP server stopped: {e}", exc_info=True)
 
         thread = threading.Thread(target=_run, name="MCP-HTTP", daemon=True)
         thread.start()

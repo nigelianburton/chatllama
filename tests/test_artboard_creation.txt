@@ -1,0 +1,3 @@
+# Test SVG artboard creation and rendering
+Create a nice greeting card design with "Hello World" in the center. Use create_artboard first, then render_svg to display it.
+EXIT

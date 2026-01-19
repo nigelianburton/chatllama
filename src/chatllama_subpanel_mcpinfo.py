@@ -255,23 +255,58 @@ class _ToolsFetchWorker(QtCore.QRunnable):
             self.signals.error.emit(str(e))
 
     def _fetch(self) -> List[Dict[str, Any]]:
+        # Check if tools were provided directly (builtin MCP)
+        if "_builtin_tools" in self.server:
+            logger.debug(f"Using provided tools for {self.server.get('name')}")
+            return self.server.get("_builtin_tools", [])
+        
         # Support stdio (command/args) and HTTP (url)
         if "url" in self.server:
-            import requests
+            import asyncio
+            from fastmcp import Client
+            
             url = self.server.get("url")
-            # Try /tools then /tools/list
-            for endpoint in ("/tools", "/tools/list"):
+            
+            # For HTTP servers, add retry logic with exponential backoff
+            max_retries = 5
+            retry_delay = 0.5
+            last_error = None
+            
+            for attempt in range(max_retries):
                 try:
-                    full = url.rstrip("/") + endpoint
-                    resp = requests.get(full, timeout=5)
-                    if resp.ok:
-                        data = resp.json()
-                        # Expect list of tools in OpenAI-like or MCP schema
-                        tools = data.get("tools") if isinstance(data, dict) else data
-                        return tools or []
-                except Exception:
-                    continue
-            raise RuntimeError("HTTP MCP tools fetch failed")
+                    async def get_tools_async():
+                        """Query MCP server for available tools using FastMCP Client."""
+                        client = Client(url)
+                        async with client:
+                            # List available tools
+                            response = await client.list_tools()
+                            tools = [
+                                {
+                                    "name": tool.name,
+                                    "description": tool.description or "",
+                                    "inputSchema": tool.inputSchema or {}
+                                }
+                                for tool in response.tools
+                            ]
+                            return tools
+                    
+                    # Run async function
+                    tools = asyncio.run(get_tools_async())
+                    if tools:
+                        logger.debug(f"Fetched {len(tools)} tools from {url} via FastMCP Client")
+                        return tools
+                    
+                except Exception as e:
+                    last_error = e
+                    if attempt < max_retries - 1:
+                        logger.debug(f"MCP fetch attempt {attempt + 1}/{max_retries} failed, retrying in {retry_delay}s: {e}")
+                        import time
+                        time.sleep(retry_delay)
+                        retry_delay *= 1.5
+                    else:
+                        logger.error(f"MCP fetch failed after {max_retries} attempts: {last_error}")
+            
+            raise RuntimeError(f"HTTP MCP tools fetch failed: {last_error}")
         # stdio via mcp.client
         command = self.server.get("command")
         args = self.server.get("args")

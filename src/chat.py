@@ -298,26 +298,55 @@ class ChatWindow(QtWidgets.QMainWindow):
         """Start built-in MCP HTTP server in the background while UI runs."""
         try:
             from mcp_http_server import SVGLayoutStudioMCP
+            from cards.card_svg import CardSVG
+            from cards._card_template import CardBase
+            
             rules_path = PROJECT_ROOT / "src" / "cards" / "svg_generation_rules.json"
 
             def ui_dispatch(svg: str) -> None:
                 # Ensure execution on UI thread
                 QtCore.QTimer.singleShot(0, lambda: self._cards_panel.display_svg(svg) if self._cards_panel else None)
 
-            srv = SVGLayoutStudioMCP(ui_display_svg=ui_dispatch, rules_path=rules_path, host=host, port=port)
+            def ui_create_card(title: str) -> CardSVG:
+                """Create a CardSVG widget and add it to the Cards panel."""
+                # Create the card template with SVG widget inside
+                card = CardBase()
+                svg_widget = CardSVG(parent=card)
+                card.set_card_widget(svg_widget)
+                
+                # Add to Cards panel
+                if self._cards_panel:
+                    QtCore.QTimer.singleShot(0, lambda: self._cards_panel.add_card(card, title))
+                
+                logger.info(f"Created CardSVG: {title}")
+                return svg_widget
+
+            srv = SVGLayoutStudioMCP(
+                ui_display_svg=ui_dispatch,
+                ui_create_card=ui_create_card,
+                rules_path=rules_path,
+                host=host,
+                port=port
+            )
             ok = srv.start()
             if ok:
                 self._mcp_http_server = srv
                 logger.info(f"Built-in MCP HTTP server started on http://{host}:{port}")
                 
-                # Register with Settings panel so it appears in MCP list
-                if self._settings_panel:
-                    server_config = srv.get_server_config()
-                    self._settings_panel.register_builtin_mcp(server_config)
-                    logger.info(f"Built-in MCP registered in Settings panel: {server_config.get('name')}")
+                # Schedule registration after a brief delay to allow server to fully start
+                def _register_mcp():
+                    if self._settings_panel:
+                        server_config = srv.get_server_config()
+                        # Pass tools directly via config to avoid HTTP query
+                        # (FastMCP's HTTP transport doesn't expose standard endpoints)
+                        server_config["_builtin_tools"] = srv.get_tools()
+                        self._settings_panel.register_builtin_mcp(server_config)
+                        logger.info(f"Built-in MCP registered in Settings panel: {server_config.get('name')}")
+                    
+                    # Re-fetch tools to merge built-in + external and update system prompt
+                    self._fetch_and_integrate_tools()
                 
-                # Re-fetch tools to merge built-in + external and update system prompt
-                self._fetch_and_integrate_tools()
+                QtCore.QTimer.singleShot(1000, _register_mcp)
             else:
                 logger.error("Failed to start built-in MCP HTTP server")
         except Exception as e:
@@ -657,31 +686,39 @@ class ChatWindow(QtWidgets.QMainWindow):
             logger.error(f"MCP panel tool call handler error: {e}")
 
     def _execute_tool_on_server(self, server: dict, tool_name: str, arguments: dict) -> Optional[str]:
-        """Execute a tool using either stdio MCP or HTTP MCP server entry.
+        """Execute a tool using either HTTP MCP (FastMCP Client) or stdio MCP.
 
         Returns formatted result text (wrapped in [TOOL_RESULT] tags) or None.
         """
         try:
-            # HTTP transport (no fallbacks)
+            # HTTP transport: Use FastMCP Client (same as for list_tools)
             if server and "url" in server:
-                import requests
-                base = str(server.get("url")).rstrip("/")
-                # Try POST /call_tool then /tools/call
-                for endpoint in ("/call_tool", "/tools/call"):
-                    try:
-                        resp = requests.post(
-                            base + endpoint,
-                            json={"name": tool_name, "arguments": arguments or {}},
-                            timeout=10,
-                        )
-                        if resp.ok:
-                            data = resp.json()
-                            # Format generically
-                            payload = json.dumps(data, indent=2)
-                            return f"[TOOL_RESULT]\n{payload}\n[END_TOOL_RESULT]"
-                    except Exception:
-                        continue
-                return None
+                import asyncio
+                from fastmcp import Client
+                
+                url = server.get("url")
+                
+                async def call_tool_async():
+                    """Call tool on HTTP MCP server using FastMCP Client."""
+                    client = Client(url)
+                    async with client:
+                        # Call the tool via MCP protocol
+                        result = await client.call_tool(tool_name, arguments or {})
+                        return result
+                
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    result = loop.run_until_complete(call_tool_async())
+                    loop.close()
+                    
+                    if result:
+                        # Format the result
+                        payload = json.dumps(result.model_dump() if hasattr(result, 'model_dump') else result, indent=2)
+                        return f"[TOOL_RESULT]\n{payload}\n[END_TOOL_RESULT]"
+                except Exception as e:
+                    logger.error(f"FastMCP tool call failed: {e}")
+                    return None
 
             # stdio transport via mcp.client (no fallbacks)
             command = server.get("command") if server else None
@@ -2226,9 +2263,8 @@ def main() -> None:
     window = ChatWindow(input_file=args.input_file, selected_model=args.model)
     window.show()
 
-    # Optional: start built-in MCP HTTP server in parallel with UI
-    if getattr(args, 'mcp_http', False):
-        window.start_built_in_mcp_http(port=getattr(args, 'mcp_http_port', 6821))
+    # Always start built-in MCP HTTP server in parallel with UI
+    window.start_built_in_mcp_http(port=getattr(args, 'mcp_http_port', 6821))
     
     # If in automation mode, schedule first message after UI is ready
     if window.automation_mode:
