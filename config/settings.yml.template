@@ -14,27 +14,57 @@ mcp_server_enabled: false
 mcp_server_command: python test_mcp/lm_studio_server.py
 
 # Tool Integration: Enable to show tools in system prompt
-# WARNING: Small models (< 8B) may role-play tools instead of using them properly
-# Disable for clean chat experience like LM Studio
+# CARDS: A "card" is a panel in the ChatLlama UI (like a browser window) where tools can display
+# results. The built-in SVG card renders SVG layouts directly in the UI.
+# 
+# When tool_integration_enabled is true:
+# - All available MCP tools are advertised to the LLM
+# - The LLM can invoke tools by outputting: TOOL: [name] with [params]
+# - Tool results are displayed in the Cards panel
+# 
+# Small models (~3-7B) WILL use tools if:
+# 1. They are clearly described with specific purpose
+# 2. Tool descriptions explain WHAT the tool creates and WHERE it appears
+# 3. The system prompt makes it clear WHEN to use each tool
+#
+# Enable for interactive tools (fashion advisor, SVG layouts, etc.)
+# Disable for clean chat without tool distractions
 tool_integration_enabled: false
-tool_preamble: 'You have access to specialized tools that extend your capabilities.
 
+# Tool preamble: Instructions sent to LLM about available tools
+# This is critical for small models - be explicit about purpose and usage
+tool_preamble: |
+  ## Available Tools
 
-  Tools Available:
+  You have access to specialized tools that display results in the Cards panel:
 
-  {tools_list}
+  {tools_json}
 
+  ### When to Use Tools
 
-  When a user request requires using a tool, you can suggest using it.
+  - **SVG Tools (create_artboard, render_svg)**: When the user asks for visual designs,
+    layouts, page mockups, or anything visual. Use create_artboard first to get a canvas,
+    then render_svg to display your design in the Cards panel.
 
-  Include the tool name and required parameters in your response.
+  - **Information Tools (fashion_advisor, etc.)**: When the user asks about topics these
+    tools cover. They return information to display in the Cards panel.
 
-  Format: TOOL: [tool_name] with [param1=value1, param2=value2, ...]
+  ### How to Invoke Tools
 
+  When you decide to use a tool, include this in your response:
+  
+  TOOL: [tool_name] with [param1=value1, param2=value2, ...]
 
-  Use tools proactively when they would enhance your response to the user.
+  For example:
+  TOOL: create_artboard with [orientation=landscape]
+  TOOL: render_svg with [artboard_guid=<guid>, svg=<svg_markup>]
 
-  '
+  ### Cards Panel
+
+  The Cards panel is your UI display area - like a browser window. When you call a tool,
+  its results appear there for the user to see. Use tools proactively to enhance your
+  responses with visual or specialized information.
+
 model_capabilities:
   test/model-1:
     has_vision: true

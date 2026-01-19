@@ -1,0 +1,119 @@
+
+Embedding Web Content into Widget Based Applications
+Use the QWebEngineView class to display web pages in the simplest way. Because it is a widget, you can embed QWebEngineView into your forms and use its convenience functions to download and display web sites.
+
+QWebEngineView *view = new QWebEngineView(parent);
+view->load(QUrl("http://www.qt.io/"));
+view->show();
+
+
+An instance of QWebEngineView has one QWebEnginePage. QWebEnginePage can have a QWebEngineHistory that provides access to the page's navigation history and several QAction objects that apply actions on the web page. In addition, a QWebEnginePage has the ability to run JavaScript code in the context of the page's main frame and to enable customization of handlers for specific events like showing custom authentication dialogs.
+
+Each QWebEnginePage belongs to a QWebEngineProfile that can have a QWebEngineSettings for specifying page settings, a QWebEngineScriptCollection for running scripts on the page, and a QWebEngineCookieStore for accessing the HTTP cookies of Chromium. A QWebEnginePage can also directly point to a script collection.
+
+For a widget based application, the web engine is automatically initialized, unless it is placed in a plugin. In that case, it must be initialized in the application main source file by using QtWebEngineQuick::initialize, as illustrated by the following code snippet:
+
+int main(int argc, char **argv)
+{
+    QtWebEngineQuick::initialize();
+
+    QApplication app(argc, argv);
+
+    QMainWindow window;
+    window.show();
+
+    return app.exec();
+}
+
+
+Embedding Web Content into Qt Quick Applications
+The WebEngineView QML type allows Qt Quick applications to render regions of dynamic web content. A WebEngineView type may share the screen with other QML types or encompass the full screen as specified within the Qt Quick application.
+
+To make sure that OpenGL context can be shared between the GUI and render processes, the web engine must be initialized by using QtWebEngineQuick::initialize in the application main source file, as illustrated by the following code snippet:
+
+int main(int argc, char *argv[])
+{
+    QGuiApplication app(argc, argv);
+
+    QtWebEngineQuick::initialize();
+
+    QQmlApplicationEngine engine;
+    engine.load(QUrl("qrc:/main.qml"));
+
+    return app.exec();
+}
+
+
+An application can load pages into the WebEngineView, using either an URL or HTML string, and navigate within session history. By default, links to different pages load within the same WebEngineView object, but web sites may request them to be opened as a new tab, window, or dialog.
+
+The following sample QML application loads a web page using the url property:
+
+import QtQuick
+import QtQuick.Window
+import QtWebEngine
+
+Window {
+    width: 1024
+    height: 750
+    visible: true
+    WebEngineView {
+        anchors.fill: parent
+        url: "https://www.qt.io"
+    }
+}
+
+
+Script Injection
+Qt WebEngine does not allow direct access to the document object model (DOM) of a page. However, the DOM can be inspected and adapted by injecting scripts.
+
+The DOM of a page is constructed when the document is ready, typically when the page is completely loaded. Therefore, executing scripts as soon as a document is created is not suitable for DOM operations, where one has to wait until the DOM is ready.
+
+In addition, an injected script shares the same world as the other scripts executed on the page, which might lead to conflicts. To avoid this, the QWebEngineScript class and the WebEngineScript QML type provide implementations of the Chromium API for Content Script Extensions. They specify the script to run, the injection point, and the world where the script is run. This enables accessing the DOM to manipulate it within a world.
+
+Since Qt 5.8, Qt WebEngine supports augmenting a script by using the following Greasemonkey-like attributes:
+
+@exclude <regexp>
+@include <regexp>
+@match <regexp>
+@name <free text>
+@run-at [document-start|document-end|document-idle]
+The attributes determine if and when a user script is run. They must be placed immediately in the beginning of the script, inside a ==UserScript== comment:
+
+// ==UserScript==
+// @include http://*.qt.io/*
+// @exclude http://wiki.qt.io/*
+// ==/UserScript==
+
+window.alert("Page is from qt.io, but not wiki.qt.io");
+
+
+If your WebEngine application is built using the Qt Quick Compiler, and the application ships JavaScript files inside .qrc resources, consider reading the section JavaScript Files in Qt Resource Files.
+
+Managing Certificates
+Qt WebEngine uses its own network stack, and therefore QSslConfiguration is not used to open SSL connections. Instead, Qt WebEngine uses the root CA certificates from the operating system to validate the peer's certificate.
+
+The WebEngineCertificateError::type and QWebEngineCertificateError::Type enumerations provide information about the types of certificate errors that might occur. The errors can be handled by using the WebEngineView::certificateError QML method or by connecting to the QWebEnginePage::certificateError signal.
+
+Proxy Support
+Qt WebEngine uses the proxy settings from Qt Network, and forwards them to Chromium's networking stack. If QNetworkProxy::applicationProxy is set, it will also be used for Qt WebEngine. If QNetworkProxyFactory::usesSystemConfiguration() is enabled, the proxy settings are automatically retrieved from the system. Settings from an installed QNetworkProxyFactory will be ignored, though.
+
+In case QNetworkProxy::user() and QNetworkProxy::password() are set, these credentials will be automatically used for proxy authentication. It is up to the user to provide valid credentials, since there is no error handling callback.
+
+If no credentials are set with QNetworkProxy, but the proxy requires authentication, QWebEnginePage::proxyAuthenticationRequired is emitted. For Qt Quick, a dialog is shown.
+
+Not all properties of QNetworkProxy are supported by Qt WebEngine. That is, QNetworkProxy::type(), QNetworkProxy::hostName() and QNetworkProxy::port() are taken into account. All other proxy settings such as QNetworkProxy::rawHeader() are ignored.
+
+High DPI Support
+High DPI support is always enabled in Qt 6, and this also applies to Qt WebEngine. For more information, see High DPI.
+
+Using WebEngine Core
+Qt WebEngine Core provides an API shared by Qt WebEngine and Qt WebEngine Widgets for handling URL requests issued for the networking stack of Chromium and for accessing its HTTP cookies.
+
+Implementing the QWebEngineUrlRequestInterceptor interface and installing the interceptor on a profile enables intercepting, blocking, and modifying URL requests (QWebEngineUrlRequestInfo) before they reach the networking stack of Chromium.
+
+A QWebEngineUrlSchemeHandler can be registered for a profile to add support for custom URL schemes. Requests for the scheme are then issued to QWebEngineUrlSchemeHandler::requestStarted() as QWebEngineUrlRequestJob objects.
+
+The QWebEngineCookieStore class provides functions for accessing HTTP cookies of Chromium. The functions can be used to synchronize cookies with QNetworkAccessManager, as well as to set, delete, and intercept cookies during navigation.
+
+Platform Notes
+Qt WebEngine currently supports only Windows, Linux, and macOS. Due to Chromium build requirements it also often requires a newer compiler than the rest of Qt. See Qt WebEngine Platform Notes for further details.

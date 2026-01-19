@@ -457,38 +457,12 @@ class ChatWindow(QtWidgets.QMainWindow):
                     self._settings_panel.register_builtin_mcp(server_config)
                     logger.info(f"Built-in MCP registered in Settings panel: {server_config.get('name')}")
                 
-                # Fetch tools and integrate with system prompt
-                self._integrate_builtin_mcp_tools()
+                # Re-fetch tools to merge built-in + external and update system prompt
+                self._fetch_and_integrate_tools()
             else:
                 logger.error("Failed to start built-in MCP HTTP server")
         except Exception as e:
             logger.error(f"start_built_in_mcp_http error: {e}")
-    
-    def _integrate_builtin_mcp_tools(self) -> None:
-        """Fetch tools from built-in MCP and merge with external MCP tools for advertising."""
-        try:
-            if not self._mcp_http_server:
-                return
-            
-            builtin_tools = self._mcp_http_server.get_tools()
-            if not builtin_tools:
-                logger.warning("Built-in MCP returned no tools")
-                return
-            
-            # Merge with existing MCP tools
-            if self._mcp_tools is None:
-                self._mcp_tools = []
-            
-            # Convert to format expected by _build_tool_prompt
-            for tool in builtin_tools:
-                # Check if already present
-                if any(t.get("name") == tool.get("name") for t in self._mcp_tools):
-                    continue
-                self._mcp_tools.append(tool)
-            
-            logger.info(f"Integrated {len(builtin_tools)} built-in MCP tools; total: {len(self._mcp_tools)}")
-        except Exception as e:
-            logger.error(f"Failed to integrate built-in MCP tools: {e}")
 
 
     def _build_ui(self) -> None:
@@ -1375,11 +1349,14 @@ class ChatWindow(QtWidgets.QMainWindow):
     def _convert_mcp_tools_to_openai_format(self, mcp_tools: list) -> list:
         """Convert MCP tool definitions to OpenAI-compatible format.
         
-        MCP tools come as ToolDescription objects. We convert them to the format
-        expected by llama-cpp-python's create_chat_completion with tools parameter.
+        MCP tools can come as either:
+        - ToolDescription objects (from MCP client)
+        - Dict format (from built-in MCPs or already converted)
+        
+        We convert them to the format expected by the LLM.
         
         Args:
-            mcp_tools: List of MCP ToolDescription objects
+            mcp_tools: List of MCP ToolDescription objects or dicts
             
         Returns:
             List of tools in OpenAI format
@@ -1390,25 +1367,38 @@ class ChatWindow(QtWidgets.QMainWindow):
         openai_tools = []
         for tool in mcp_tools:
             try:
-                # MCP ToolDescription has: name, description, inputSchema
+                # Handle both dict and object formats
+                if isinstance(tool, dict):
+                    # Already a dict from built-in MCP or previous conversion
+                    name = tool.get("name", "")
+                    description = tool.get("description", "")
+                    input_schema = tool.get("inputSchema", {})
+                else:
+                    # MCP ToolDescription object with attributes
+                    name = getattr(tool, "name", "")
+                    description = getattr(tool, "description", "")
+                    input_schema = getattr(tool, "inputSchema", {})
+                
                 tool_def = {
                     "type": "function",
                     "function": {
-                        "name": tool.name,
-                        "description": tool.description or "",
-                        "parameters": tool.inputSchema if hasattr(tool, 'inputSchema') else {}
+                        "name": name,
+                        "description": description or "",
+                        "parameters": input_schema
                     }
                 }
                 openai_tools.append(tool_def)
-                logger.debug(f"Converted tool '{tool.name}' to OpenAI format")
+                logger.debug(f"Converted tool '{name}' to OpenAI format")
             except Exception as e:
                 logger.warning(f"Failed to convert tool {tool}: {e}")
                 continue
         
         logger.info(f"Converted {len(openai_tools)} MCP tools to OpenAI format")
-        # Log the actual tool definitions being sent
-        for tool in openai_tools:
+        # Log the actual tool definitions being sent (first 5 only)
+        for i, tool in enumerate(openai_tools[:5]):
             logger.info(f"Tool definition: {json.dumps(tool, indent=2)}")
+        if len(openai_tools) > 5:
+            logger.info(f"... and {len(openai_tools) - 5} more tools")
         return openai_tools
 
     def _fetch_and_integrate_tools(self) -> None:
@@ -1426,6 +1416,18 @@ class ChatWindow(QtWidgets.QMainWindow):
         # Fetch external MCP tools
         tools = self._fetch_mcp_tools()
         
+        # Convert Tool objects to dicts if needed
+        if tools and not isinstance(tools[0], dict):
+            tools = [
+                {
+                    "name": getattr(t, "name", ""),
+                    "description": getattr(t, "description", ""),
+                    "inputSchema": getattr(t, "inputSchema", {})
+                }
+                for t in tools
+            ]
+            logger.debug(f"Converted {len(tools)} Tool objects to dict format")
+        
         # Merge with built-in MCP tools if available
         if self._mcp_http_server:
             try:
@@ -1435,12 +1437,16 @@ class ChatWindow(QtWidgets.QMainWindow):
                         tools = []
                     # Merge without duplicates
                     existing_names = {t.get("name") for t in tools}
+                    new_tools = []
                     for bt in builtin_tools:
                         if bt.get("name") not in existing_names:
                             tools.append(bt)
-                    logger.info(f"Merged {len(builtin_tools)} built-in MCP tools with external tools")
+                            new_tools.append(bt)
+                    logger.info(f"Merged {len(new_tools)} built-in MCP tools with {len(existing_names)} external tools")
+                    for nt in new_tools:
+                        logger.debug(f"  + Built-in tool: {nt.get('name')} - {nt.get('description', '')[:80]}")
             except Exception as e:
-                logger.error(f"Failed to merge built-in MCP tools: {e}")
+                logger.error(f"Failed to merge built-in MCP tools: {e}", exc_info=True)
         
         if not tools:
             logger.warning("No tools fetched from MCP servers; system prompt unchanged")
@@ -1450,12 +1456,21 @@ class ChatWindow(QtWidgets.QMainWindow):
         # Cache tools for later use
         self._mcp_tools = tools
         
-        # Use the preamble directly
-        tool_prompt = TOOL_PREAMBLE
+        # Log tool summary before building prompt
+        logger.info(f"Final tool list for system prompt: {len(tools)} tools")
+        for i, tool in enumerate(tools, 1):
+            logger.debug(f"  {i}. {tool.get('name')} - {tool.get('description', 'no description')[:100]}")
+        
+        # Build tool prompt with {tools_json} replaced
+        tool_prompt = self._build_tool_prompt(tools)
         
         # Update system message to include tool information
-        self._messages[0]["content"] = f"You are a helpful assistant.\n\n{tool_prompt}"
-        logger.info(f"Integrated {len(tools)} total MCP tools into system prompt")
+        full_system_prompt = f"You are a helpful assistant.\n\n{tool_prompt}"
+        self._messages[0]["content"] = full_system_prompt
+        
+        # Log full system prompt for verification
+        logger.info(f"Updated system prompt with {len(tools)} tools")
+        logger.debug(f"=== SYSTEM PROMPT START ===\n{full_system_prompt}\n=== SYSTEM PROMPT END ===")
         # Status label removed; no-op on connect
 
     def _parse_tool_request(self, text: str) -> Optional[tuple[str, dict]]:
@@ -2148,22 +2163,47 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._messages = ([system_msg] if system_msg else []) + recent_messages
             logger.info(f"Pruned history to {len(self._messages)} messages")
 
-        # Fetch MCP tools and inject as text into system prompt
-        # Format matches LM Studio's approach: text-based tool list with [TOOL_REQUEST] markers
+        # Fetch MCP tools (external only) and merge with built-in if available
         mcp_tools = self._fetch_mcp_tools()
+        
+        # Merge built-in tools if available
+        if self._mcp_http_server:
+            try:
+                builtin_tools = self._mcp_http_server.get_tools()
+                if builtin_tools:
+                    if mcp_tools is None:
+                        mcp_tools = []
+                    existing_names = {t.get("name") for t in mcp_tools}
+                    for bt in builtin_tools:
+                        if bt.get("name") not in existing_names:
+                            mcp_tools.append(bt)
+                    logger.debug(f"Merged {len(builtin_tools)} built-in tools for this chat completion")
+            except Exception as e:
+                logger.error(f"Failed to merge built-in tools in chat completion: {e}")
+        
         if mcp_tools:
+            logger.info(f"Chat completion: {len(mcp_tools)} tools available (including built-in)")
+            for i, tool in enumerate(mcp_tools, 1):
+                logger.debug(f"  {i}. {tool.get('name')} - {tool.get('description', '')[:80]}")
+            
             tool_prompt = self._build_tool_prompt(mcp_tools)
             if tool_prompt:
                 # Inject into system message
                 if self._messages[0]["role"] == "system":
                     self._messages[0]["content"] += tool_prompt
+                    logger.debug(f"Injected tool prompt ({len(tool_prompt)} chars) into system message")
                 else:
                     # Shouldn't happen, but handle gracefully
                     logger.warning("First message is not system message, skipping tool injection")
-                logger.info(f"Injected {len(mcp_tools)} tools into system prompt")
+                logger.info(f"Injected {len(mcp_tools)} tools into system prompt for this completion")
+        else:
+            logger.debug("No tools available for this chat completion")
         
         # Store MCP tools locally for later execution (no longer passing to model)
         self._mcp_tools = mcp_tools
+
+        # Log the full system prompt before sending to model
+        logger.debug(f"=== SYSTEM MESSAGE FOR THIS COMPLETION ===\n{self._messages[0]['content']}\n=== END SYSTEM MESSAGE ===")
 
         # Create and move worker to thread (no tools parameter)
         self._chat_worker = ChatWorker(self._model, self._messages)

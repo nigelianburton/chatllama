@@ -72,40 +72,40 @@ class SVGLayoutStudioMCP:
         tools = [
             {
                 "name": "create_artboard",
-                "description": "Create an artboard (canvas) for layout work; MUST be first step. Returns GUID and attaches directive SVG rules to guide small models.",
+                "description": "CREATE AN ARTBOARD (CANVAS) FIRST STEP BEFORE RENDERING SVG. This creates a blank canvas you will render your design on. Returns a GUID and SVG dimension rules. Always call this first, then use render_svg to display your design. Artboards are portrait (1000x1400px) or landscape (1400x1000px) by default.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "orientation": {
                             "type": "string",
-                            "description": "Canvas orientation: portrait or landscape",
+                            "description": "Canvas orientation: 'portrait' for vertical designs (1000x1400px) or 'landscape' for horizontal designs (1400x1000px). Default: portrait",
                             "enum": ["portrait", "landscape"],
                             "default": "portrait"
                         },
                         "width": {
                             "type": "integer",
-                            "description": "Canvas width in pixels (optional, auto-calculated from orientation)"
+                            "description": "Canvas width in pixels (optional, auto-calculated from orientation). Typically 1000 (portrait) or 1400 (landscape)"
                         },
                         "height": {
                             "type": "integer",
-                            "description": "Canvas height in pixels (optional, auto-calculated from orientation)"
+                            "description": "Canvas height in pixels (optional, auto-calculated from orientation). Typically 1400 (portrait) or 1000 (landscape)"
                         }
                     }
                 }
             },
             {
                 "name": "render_svg",
-                "description": "Render SVG markup to the UI cards panel. Must provide artboard GUID from create_artboard.",
+                "description": "RENDER SVG DESIGN TO DISPLAY IN THE CARDS PANEL. Pass the artboard GUID from create_artboard and your complete SVG markup. This displays your design in the user's Cards panel. Use this after create_artboard to show your design.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "artboard_guid": {
                             "type": "string",
-                            "description": "GUID returned by create_artboard"
+                            "description": "GUID returned by create_artboard (required). This identifies which artboard to render on."
                         },
                         "svg": {
                             "type": "string",
-                            "description": "Complete SVG markup to render"
+                            "description": "Complete SVG markup to render. Must be valid SVG with <svg> root element and viewBox attribute."
                         }
                     },
                     "required": ["artboard_guid", "svg"]
@@ -113,7 +113,7 @@ class SVGLayoutStudioMCP:
             },
             {
                 "name": "list_svg_capabilities",
-                "description": "List available SVG-related tools and their capabilities",
+                "description": "List available SVG tools and their capabilities. Returns information about create_artboard and render_svg.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {}
