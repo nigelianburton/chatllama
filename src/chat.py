@@ -408,6 +408,7 @@ class ChatWindow(QtWidgets.QMainWindow):
         self._use_llama_server = False
         self._llama_server_process = None
         self._mcp_server_process = None
+        self._mcp_http_server = None
         self._mcp_tools = None  # Will be populated during chat
         self._last_local_model: Optional[str] = None  # Store local model when switching modes
         self._cpp_handler: Optional[ChatLlamaCpp] = None
@@ -433,6 +434,26 @@ class ChatWindow(QtWidgets.QMainWindow):
         if self.automation_mode:
             self.pending_messages = self._load_input_file(input_file)
             logger.info(f"Automation mode: loaded {len(self.pending_messages)} messages from {input_file}")
+
+    def start_built_in_mcp_http(self, host: str = "127.0.0.1", port: int = 6821) -> None:
+        """Start built-in MCP HTTP server in the background while UI runs."""
+        try:
+            from mcp_http_server import ChatLlamaMCPServer
+            rules_path = PROJECT_ROOT / "src" / "cards" / "svg_generation_rules.json"
+
+            def ui_dispatch(svg: str) -> None:
+                # Ensure execution on UI thread
+                QtCore.QTimer.singleShot(0, lambda: self._cards_panel.display_svg(svg) if self._cards_panel else None)
+
+            srv = ChatLlamaMCPServer(ui_display_svg=ui_dispatch, rules_path=rules_path, host=host, port=port)
+            ok = srv.start()
+            if ok:
+                self._mcp_http_server = srv
+                logger.info(f"Built-in MCP HTTP server started on http://{host}:{port}")
+            else:
+                logger.error("Failed to start built-in MCP HTTP server")
+        except Exception as e:
+            logger.error(f"start_built_in_mcp_http error: {e}")
 
 
     def _build_ui(self) -> None:
@@ -2503,6 +2524,17 @@ def main() -> None:
         help='Model to load on startup. Can be a relative path (e.g., "mradermacher/Huihui-LFM2-2.6B-Exp-abliterated-GGUF") '
              'or a full file path to a GGUF file (e.g., "D:\\LLM Models\\mradermacher\\gemma-3-27b-it...\\model.gguf")'
     )
+    parser.add_argument(
+        '--mcp-http',
+        action='store_true',
+        help='Start built-in MCP HTTP server (svg-layout-studio) alongside the UI.'
+    )
+    parser.add_argument(
+        '--mcp-http-port',
+        type=int,
+        default=6821,
+        help='Port for built-in MCP HTTP server (default: 6821).'
+    )
     args = parser.parse_args()
     
     # Handle --list-models
@@ -2521,6 +2553,10 @@ def main() -> None:
     app = QtWidgets.QApplication(sys.argv)
     window = ChatWindow(input_file=args.input_file, selected_model=args.model)
     window.show()
+
+    # Optional: start built-in MCP HTTP server in parallel with UI
+    if getattr(args, 'mcp_http', False):
+        window.start_built_in_mcp_http(port=getattr(args, 'mcp_http_port', 6821))
     
     # If in automation mode, schedule first message after UI is ready
     if window.automation_mode:

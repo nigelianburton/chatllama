@@ -30,8 +30,8 @@ class CardsPanel(QtWidgets.QWidget):
         scroll_layout.setContentsMargins(8, 8, 8, 8)
         scroll_layout.setSpacing(12)
 
-        # Instantiate CardChrome with the image file path
-        logger.info("Creating CardChrome widget with local image")
+        # Instantiate CardChrome with initial content (placeholder image)
+        logger.info("Creating CardChrome widget for SVG display")
         self._card_chrome = CardChrome(
             parent=scroll_container,
             start_url=r"T:\pic1.JPG"
@@ -44,3 +44,14 @@ class CardsPanel(QtWidgets.QWidget):
         layout.addWidget(scroll_area)
         self.setLayout(layout)
         logger.info("CardsPanel UI built successfully")
+
+    def display_svg(self, svg_markup: str) -> None:
+        """Display SVG markup in the embedded card widget."""
+        try:
+            if not svg_markup:
+                return
+            if hasattr(self, "_card_chrome") and self._card_chrome:
+                self._card_chrome.load_svg_content(svg_markup)
+                logger.info("CardsPanel: SVG rendered in card widget")
+        except Exception as e:
+            logger.error(f"CardsPanel.display_svg failed: {e}")
