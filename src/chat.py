@@ -112,6 +112,13 @@ if "QT_PLUGIN_PATH" not in os.environ:
 else:
     logger.debug(f"QT_PLUGIN_PATH already set to: {os.environ['QT_PLUGIN_PATH']}")
 
+# Force QWebEngine to use software rendering and disable sandbox
+os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
+os.environ["QT_QUICK_BACKEND"] = "software"
+os.environ["QT_XCB_GL_INTEGRATION"] = "none"
+os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-gpu --disable-software-rasterizer --in-process-gpu"
+logger.debug("Set WebEngine environment variables: sandbox disabled, software backend")
+
 from llama_cpp import Llama
 from PyQt6 import QtCore, QtGui, QtWidgets
 from chatllama_pane_settings import SettingsPanel

@@ -30,11 +30,11 @@ class CardsPanel(QtWidgets.QWidget):
         scroll_layout.setContentsMargins(8, 8, 8, 8)
         scroll_layout.setSpacing(12)
 
-        # Instantiate CardChrome with the eBay image URL
-        logger.info("Creating CardChrome widget with eBay image URL")
+        # Instantiate CardChrome with the image file path
+        logger.info("Creating CardChrome widget with local image")
         self._card_chrome = CardChrome(
             parent=scroll_container,
-            start_url="https://i.ebayimg.com/images/g/JvsAAOSwyoll7osP/s-l1200.jpg"
+            start_url=r"T:\pic1.JPG"
         )
         logger.info(f"CardChrome created: size={self._card_chrome.size()}, minimumHeight={self._card_chrome.minimumHeight()}")
         scroll_layout.addWidget(self._card_chrome)

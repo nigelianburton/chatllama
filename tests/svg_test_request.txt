@@ -1,0 +1,20 @@
+Design a fashion magazine cover as a single valid SVG. Keep it brief—only return the SVG markup.
+
+Layout:
+- Choose portrait (1000×1400, viewBox="0 0 1000 1400") or landscape (1400×1000, viewBox="0 0 1400 1000").
+- Background photo: `<image href="pic1.jpg" x="0" y="0" width="W" height="H" preserveAspectRatio="xMidYMid slice" />`.
+- Optional readability layer: add a full-page translucent overlay (e.g., `#f4f4ff` at ~70% → 0% gradient) drawn above the photo.
+
+Typography (use absolute pixels, no expressions):
+- Title (magazine name "Avant Vela"): centered near top, size = 10% of page height (portrait: 140px; landscape: 100px), bold, high-contrast.
+- Subheadings: two blurbs mid-page, one center-left, one center-right; smaller than title (portrait ~70px; landscape ~60px). Example text: "NeoSilk Revival" and "Chromatic Drift".
+- Footer: centered near bottom. Example: "Issue 07 · Spring 2026".
+
+Color palette for text/accents:
+- Deep navy #0d1b2a, steel blue #1b263b, soft lilac accent #e0aaff, light glass #f4f4ff with opacity.
+
+Output rules:
+- Return only the SVG (no explanations).
+- Ensure viewBox starts at 0 0.
+- Use numeric values for font-size and positions (no math expressions in attributes).
+- Include `<svg>`, `<image>`, optional overlay `<rect>`, and text elements for title, two subheadings, and footer.

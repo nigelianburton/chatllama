@@ -2,14 +2,7 @@ import logging
 from typing import Optional
 from PyQt6 import QtCore, QtGui, QtWidgets
 import markdown
-from message_bubble import (
-    MessageBubble, 
-    UserInstructionContent, 
-    UserInstructionWithAttachmentsContent,
-    ToolRequestContent,
-    ToolResponseContent,
-    AssistantContent
-)
+from message_bubble import MessageBubble
 
 logger = logging.getLogger(__name__)
 
@@ -371,41 +364,16 @@ class ChatPanel(QtWidgets.QWidget):
             tool_name = tool_response.get("name", "unknown")
             bubble_features.append(f"tool_response:{tool_name}")
         
-        features_str = f" [{', '.join(bubble_features)}]" if bubble_features else ""
         text_preview = text[:50] + "..." if len(text) > 50 else text
-        logger.info(f"[Bubble Creation] Adding {message_type.upper()} bubble to history{features_str} - Text: \"{text_preview}\"")
+        logger.info(f"[Bubble Creation] Adding {message_type.upper()} bubble to history - Text: \"{text_preview}\"")
         
-        # Create appropriate content widget based on message type
-        content_widget = None
+        # Create SVG bubble directly from message type and text
+        bubble = MessageBubble(msg_type=message_type)
         
-        if message_type == "user":
-            # Check if user message has attachments
-            if image_paths:
-                content_widget = UserInstructionWithAttachmentsContent(text, image_paths)
-            elif image_path:
-                content_widget = UserInstructionWithAttachmentsContent(text, [image_path])
-            else:
-                content_widget = UserInstructionContent(text)
+        # Set text content
+        if text:
+            bubble.set_text(text)
         
-        elif message_type == "assistant":
-            content_widget = AssistantContent(text)
-        
-        elif tool_request:
-            tool_name = tool_request.get("name", "Unknown Tool")
-            arguments = tool_request.get("arguments", {})
-            content_widget = ToolRequestContent(tool_name, arguments)
-        
-        elif tool_response:
-            tool_name = tool_response.get("name", "Unknown")
-            response_data = tool_response.get("result", {})
-            content_widget = ToolResponseContent(tool_name, response_data)
-        
-        else:
-            # Default: plain text
-            content_widget = UserInstructionContent(text)
-        
-        # Create the bubble with the content widget
-        bubble = MessageBubble(msg_type=message_type, content_widget=content_widget)
         bubble.show()
         
         # Create list item
@@ -483,12 +451,8 @@ class ChatPanel(QtWidgets.QWidget):
         
         bubble = self._current_stream_bubble
         
-        # Find the AssistantContent widget inside the bubble
-        frame_layout = bubble.rounded_frame.layout()
-        if frame_layout and frame_layout.count() > 0:
-            content_widget = frame_layout.itemAt(0).widget()
-            if isinstance(content_widget, AssistantContent):
-                content_widget.set_text(text)
+        # Update bubble with final text (SVG rendering)
+        bubble.set_text(text)
         
         # Update item size
         if self._current_stream_item is not None:
@@ -514,17 +478,12 @@ class ChatPanel(QtWidgets.QWidget):
         bubble.msg_type = "tool_request"
         bubble.display_type = "tool_request"
         
-        # Create and set new content widget
-        content_widget = ToolRequestContent(tool_name, arguments)
-        bubble.set_content_widget(content_widget)
+        # Build tool request display text
+        args_str = ", ".join([f"{k}={v}" for k, v in arguments.items()])
+        tool_text = f"Tool: {tool_name}\nArguments: {args_str}"
         
-        # Update frame style to tool_request color
-        from message_bubble import MESSAGE_COLORS
-        bg_color = MESSAGE_COLORS.get("tool_request", MESSAGE_COLORS["system"])
-        bubble._update_frame_style(bg_color)
-        
-        # Update type overlay
-        bubble.type_overlay.setText("TOOL_REQUEST")
+        # Update bubble content (SVG rendering)
+        bubble.set_text(tool_text)
         
         # Update item size
         if self._current_stream_item is not None:

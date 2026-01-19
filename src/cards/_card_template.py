@@ -30,6 +30,11 @@ class AspectRatioFrame(QtWidgets.QFrame):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         logger.info(f"[AspectRatioFrame] resizeEvent: new size = {event.size()}, old size = {event.oldSize()}")
+        # Force height recalculation when width changes
+        if event.size().width() != event.oldSize().width():
+            new_height = self.heightForWidth(event.size().width())
+            self.setFixedHeight(new_height)
+            logger.info(f"[AspectRatioFrame] Width changed, updated height to {new_height}")
 
 
 class CardBase(QtWidgets.QFrame):

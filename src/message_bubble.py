@@ -1,8 +1,13 @@
+"""Message bubble rendering using SVG for deterministic sizing and LLM control.
+
+Each bubble type (instruction, reply, tool_request, etc.) generates an SVG string
+with exact dimensions. MessageBubble renders the SVG using QSvgWidget.
+"""
+
 import logging
 from typing import Optional
 from PyQt6 import QtCore, QtGui, QtWidgets
-import markdown
-import json
+from PyQt6.QtSvgWidgets import QSvgWidget
 
 logger = logging.getLogger(__name__)
 
@@ -20,285 +25,177 @@ MESSAGE_COLORS = {
     "error": "#ffebee",            # Light red
 }
 
+# SVG text rendering parameters
+BUBBLE_PADDING = 12  # 6px on each side
+BUBBLE_WIDTH = 380
+TEXT_FONT_SIZE = 11
+BORDER_COLOR = "#888888"
+BORDER_WIDTH = 1
+BORDER_RADIUS = 8
+OVERLAY_FONT_SIZE = 9
 
-# Content widget classes for different bubble types
-class UserInstructionContent(QtWidgets.QFrame):
-    """Display user instruction as plain text."""
+
+def _wrap_text(text: str, max_chars: int = 60) -> list[str]:
+    """Wrap text into lines."""
+    words = text.split()
+    lines = []
+    current_line = []
     
-    def __init__(self, text: str, parent=None):
-        super().__init__(parent)
-        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        layout = QtWidgets.QVBoxLayout()
-        layout.setContentsMargins(1, 1, 1, 1)
-        layout.setSpacing(0)
-        
-        label = QtWidgets.QLabel(text)
-        label.setWordWrap(True)
-        label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
-        label.setStyleSheet("color: #000000; font-size: 11px; background-color: transparent;")
-        label.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
-        label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.MinimumExpanding)
-        
-        layout.addWidget(label, 1)
-        self.setLayout(layout)
-
-
-class UserInstructionWithAttachmentsContent(QtWidgets.QFrame):
-    """Display user instruction with image attachments (thumbnails on right)."""
-    
-    def __init__(self, text: str, image_paths: list[str], parent=None):
-        super().__init__(parent)
-        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        layout = QtWidgets.QHBoxLayout()
-        layout.setContentsMargins(1, 1, 1, 1)
-        layout.setSpacing(3)
-        
-        # Text on left
-        text_label = QtWidgets.QLabel(text)
-        text_label.setWordWrap(True)
-        text_label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
-        text_label.setStyleSheet("color: #000000; font-size: 11px; background-color: transparent;")
-        text_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
-        text_label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.MinimumExpanding)
-        layout.addWidget(text_label, 1)
-        
-        # Thumbnails on right (stack vertically)
-        thumb_layout = QtWidgets.QVBoxLayout()
-        thumb_layout.setSpacing(3)
-        for image_path in image_paths[:3]:  # Max 3 images
-            thumb = QtWidgets.QLabel()
-            pixmap = QtGui.QPixmap(image_path)
-            if not pixmap.isNull():
-                scaled = pixmap.scaledToHeight(60, QtCore.Qt.TransformationMode.SmoothTransformation)
-                thumb.setPixmap(scaled)
-                thumb.setStyleSheet("border: 1px solid #888888;")
+    for word in words:
+        current_line.append(word)
+        if len(' '.join(current_line)) > max_chars:
+            if len(current_line) > 1:
+                current_line.pop()
+                lines.append(' '.join(current_line))
+                current_line = [word]
             else:
-                thumb.setText("[Image\nNot Found]")
-                thumb.setStyleSheet("color: #ff0000; background-color: #cccccc; border: 1px solid #888888;")
-            thumb.setFixedSize(60, 60)
-            thumb_layout.addWidget(thumb)
-        thumb_layout.addStretch()
-        layout.addLayout(thumb_layout, 0)
-        
-        self.setLayout(layout)
+                lines.append(word)
+                current_line = []
+    
+    if current_line:
+        lines.append(' '.join(current_line))
+    
+    return lines
 
 
-class ToolRequestContent(QtWidgets.QFrame):
-    """Display tool request with name/description on left and arguments table on right."""
-    
-    def __init__(self, tool_name: str, arguments: dict, parent=None):
-        super().__init__(parent)
-        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        layout = QtWidgets.QHBoxLayout()
-        layout.setContentsMargins(1, 1, 1, 1)
-        layout.setSpacing(3)
-        
-        # Text on left (50%)
-        text_label = QtWidgets.QLabel(f"Tool: {tool_name}")
-        text_label.setWordWrap(True)
-        text_label.setStyleSheet("color: #000000; font-size: 11px; font-weight: bold; background-color: transparent;")
-        text_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
-        text_label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.MinimumExpanding)
-        layout.addWidget(text_label, 1)
-        
-        # Arguments table on right (50%)
-        table_widget = QtWidgets.QWidget()
-        table_layout = QtWidgets.QGridLayout()
-        table_layout.setContentsMargins(0, 0, 0, 0)
-        table_layout.setSpacing(2)
-        
-        if arguments:
-            table_layout.addWidget(self._create_label("Arguments:", bold=True), 0, 0, 1, 2)
-            row = 1
-            for arg_name, arg_value in arguments.items():
-                table_layout.addWidget(self._create_label(str(arg_name), bold=True), row, 0)
-                table_layout.addWidget(self._create_label(str(arg_value)), row, 1)
-                row += 1
-            table_layout.addItem(QtWidgets.QSpacerItem(0, 0, QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Expanding), row, 0)
-        
-        table_widget.setLayout(table_layout)
-        table_widget.setStyleSheet("background-color: rgba(255, 255, 255, 0.3); border: 1px solid #888888; border-radius: 4px;")
-        layout.addWidget(table_widget, 1)
-        
-        self.setLayout(layout)
-    
-    def _create_label(self, text: str, bold: bool = False) -> QtWidgets.QLabel:
-        label = QtWidgets.QLabel(text)
-        label.setWordWrap(True)
-        label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
-        font_weight = "bold" if bold else "normal"
-        label.setStyleSheet(f"color: #000000; font-size: 10px; font-weight: {font_weight}; background-color: transparent;")
-        return label
+def _calculate_text_height(text: str, max_chars: int = 60) -> int:
+    """Calculate text height based on wrapped lines."""
+    lines = _wrap_text(text, max_chars)
+    line_height = 16  # approximate line height in pixels
+    return len(lines) * line_height
 
 
-class AssistantContent(QtWidgets.QFrame):
-    """Display assistant message with markdown rendering and live streaming support."""
+def generate_instruction_svg(text: str, msg_type: str = "instruction", overlay_text: str = "INSTRUCTION") -> tuple[str, int]:
+    """Generate SVG for instruction/reply text bubble.
     
-    def __init__(self, text: str = "", parent=None):
-        super().__init__(parent)
-        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        layout = QtWidgets.QVBoxLayout()
-        layout.setContentsMargins(1, 1, 1, 1)
-        layout.setSpacing(0)
-        
-        self.text_browser = QtWidgets.QTextBrowser()
-        self.text_browser.setOpenExternalLinks(True)
-        self.text_browser.setReadOnly(True)
-        self.text_browser.setStyleSheet("""
-            QTextBrowser {
-                color: #000000;
-                font-size: 11px;
-                background-color: transparent;
-                border: none;
-            }
-        """)
-        self.text_browser.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.MinimumExpanding)
-        
-        self.set_text(text)
-        layout.addWidget(self.text_browser, 1)
-        self.setLayout(layout)
+    Returns (svg_string, height)
+    """
+    bg_color = MESSAGE_COLORS.get(msg_type, MESSAGE_COLORS["system"])
     
-    def set_text(self, text: str) -> None:
-        """Set and render markdown text."""
-        if text:
-            html = markdown.markdown(text, extensions=['fenced_code', 'codehilite', 'tables', 'nl2br'])
-            self.text_browser.setHtml(html)
-        else:
-            self.text_browser.setHtml("")
+    # Calculate dimensions
+    text_height = _calculate_text_height(text)
+    content_height = text_height + BUBBLE_PADDING
+    total_height = content_height
     
-    def append_text(self, chunk: str) -> None:
-        """Append streamed text chunk (plain text, rendered on finalize)."""
-        cursor = self.text_browser.textCursor()
-        cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
-        cursor.insertText(chunk)
-        self.text_browser.setTextCursor(cursor)
-        self.text_browser.ensureCursorVisible()
+    # Build SVG
+    svg_lines = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{BUBBLE_WIDTH}" height="{total_height}">',
+        f'  <!-- Background with rounded corners -->',
+        f'  <rect x="0" y="0" width="{BUBBLE_WIDTH}" height="{total_height}" rx="{BORDER_RADIUS}" ry="{BORDER_RADIUS}"',
+        f'        fill="{bg_color}" stroke="{BORDER_COLOR}" stroke-width="{BORDER_WIDTH}"/>',
+        f'  <!-- Text content -->',
+    ]
+    
+    # Add wrapped text lines
+    y_pos = 6 + BUBBLE_PADDING // 2
+    for line in _wrap_text(text):
+        svg_lines.append(
+            f'  <text x="6" y="{y_pos}" font-family="Arial, sans-serif" font-size="{TEXT_FONT_SIZE}" fill="#000000">'
+            f'{_escape_xml(line)}</text>'
+        )
+        y_pos += 16
+    
+    svg_lines.append('</svg>')
+    
+    svg_string = '\n'.join(svg_lines)
+    return svg_string, total_height
 
 
-class ToolRequestContent(QtWidgets.QFrame):
-    """Display tool request with name/description on left and arguments table on right."""
+def generate_tool_request_svg(tool_name: str, arguments: dict) -> tuple[str, int]:
+    """Generate SVG for tool request bubble."""
+    bg_color = MESSAGE_COLORS["tool_request"]
     
-    def __init__(self, tool_name: str, arguments: dict, parent=None):
-        super().__init__(parent)
-        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        layout = QtWidgets.QHBoxLayout()
-        layout.setContentsMargins(1, 1, 1, 1)
-        layout.setSpacing(3)
-        
-        # Text on left (50%)
-        text_label = QtWidgets.QLabel(f"Tool: {tool_name}")
-        text_label.setWordWrap(True)
-        text_label.setStyleSheet("color: #000000; font-size: 11px; font-weight: bold; background-color: transparent;")
-        text_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
-        text_label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.MinimumExpanding)
-        layout.addWidget(text_label, 1)
-        
-        # Arguments table on right (50%)
-        table_widget = QtWidgets.QWidget()
-        table_layout = QtWidgets.QGridLayout()
-        table_layout.setContentsMargins(0, 0, 0, 0)
-        table_layout.setSpacing(2)
-        
-        if arguments:
-            table_layout.addWidget(self._create_label("Arguments:", bold=True), 0, 0, 1, 2)
-            row = 1
-            for arg_name, arg_value in arguments.items():
-                table_layout.addWidget(self._create_label(str(arg_name), bold=True), row, 0)
-                table_layout.addWidget(self._create_label(str(arg_value)), row, 1)
-                row += 1
-            table_layout.addItem(QtWidgets.QSpacerItem(0, 0, QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Expanding), row, 0)
-        
-        table_widget.setLayout(table_layout)
-        table_widget.setStyleSheet("background-color: rgba(255, 255, 255, 0.3); border: 1px solid #888888; border-radius: 4px;")
-        layout.addWidget(table_widget, 1)
-        
-        self.setLayout(layout)
+    # Calculate height based on tool name and arguments
+    lines = [f"Tool: {tool_name}"]
+    if arguments:
+        lines.append("Arguments:")
+        for key, value in arguments.items():
+            lines.append(f"  {key}: {str(value)[:40]}")
     
-    def _create_label(self, text: str, bold: bool = False) -> QtWidgets.QLabel:
-        label = QtWidgets.QLabel(text)
-        label.setWordWrap(True)
-        label.setTextInteractionFlags(QtCore.Qt.TextInteractionFlag.TextSelectableByMouse)
-        font_weight = "bold" if bold else "normal"
-        label.setStyleSheet(f"color: #000000; font-size: 10px; font-weight: {font_weight}; background-color: transparent;")
-        return label
+    text_height = len(lines) * 16
+    content_height = text_height + BUBBLE_PADDING
+    total_height = content_height
+    
+    svg_lines = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{BUBBLE_WIDTH}" height="{total_height}">',
+        f'  <rect x="0" y="0" width="{BUBBLE_WIDTH}" height="{total_height}" rx="{BORDER_RADIUS}" ry="{BORDER_RADIUS}"',
+        f'        fill="{bg_color}" stroke="{BORDER_COLOR}" stroke-width="{BORDER_WIDTH}"/>',
+    ]
+    
+    y_pos = 6 + BUBBLE_PADDING // 2
+    for i, line in enumerate(lines):
+        weight = "bold" if i == 0 else "normal"
+        size = 12 if i == 0 else TEXT_FONT_SIZE
+        svg_lines.append(
+            f'  <text x="6" y="{y_pos}" font-family="Arial, sans-serif" font-size="{size}" font-weight="{weight}" fill="#000000">'
+            f'{_escape_xml(line)}</text>'
+        )
+        y_pos += 16
+    
+    svg_lines.append('</svg>')
+    return '\n'.join(svg_lines), total_height
 
 
-class ToolResponseContent(QtWidgets.QFrame):
-    """Display tool response as formatted JSON in a white text box."""
+def generate_tool_response_svg(tool_name: str, response_data: dict) -> tuple[str, int]:
+    """Generate SVG for tool response bubble."""
+    bg_color = MESSAGE_COLORS["tool_response"]
     
-    def __init__(self, tool_name: str, response_data: dict, parent=None):
-        super().__init__(parent)
-        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        layout = QtWidgets.QVBoxLayout()
-        layout.setContentsMargins(5, 5, 5, 5)
-        layout.setSpacing(3)
-        
-        # Header (no border)
-        header = QtWidgets.QLabel(f"Tool Response: {tool_name}")
-        header.setStyleSheet("color: #000000; font-size: 12px; font-weight: bold; background-color: transparent;")
-        layout.addWidget(header)
-        
-        # Parse response (assume it's already a dict or JSON string)
-        if isinstance(response_data, str):
-            try:
-                # Try to strip wrapper tags first
-                cleaned = response_data
-                if cleaned.startswith("[TOOL_RESULT]"):
-                    cleaned = cleaned.replace("[TOOL_RESULT]", "", 1)
-                if cleaned.endswith("[END_TOOL_RESULT]"):
-                    cleaned = cleaned[:-len("[END_TOOL_RESULT]")]
-                cleaned = cleaned.strip()
-                
-                data = json.loads(cleaned)
-            except json.JSONDecodeError:
-                # If not JSON, display as plain text
-                data = response_data
-        else:
-            data = response_data
-        
-        # Format JSON for display
-        if isinstance(data, dict):
-            json_text = json.dumps(data, indent=2)
-        else:
-            json_text = str(data)
-        
-        # Create white text box for JSON response
-        text_box = QtWidgets.QPlainTextEdit()
-        text_box.setPlainText(json_text)
-        text_box.setReadOnly(True)
-        text_box.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
-        text_box.setStyleSheet("""
-            QPlainTextEdit {
-                color: #000000;
-                font-size: 10px;
-                font-family: 'Courier New', monospace;
-                background-color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 4px;
-                margin: 0px;
-            }
-        """)
-        text_box.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.MinimumExpanding)
-        layout.addWidget(text_box, 1)
-        
-        self.setLayout(layout)
+    # Convert response to lines
+    import json
+    if isinstance(response_data, dict):
+        response_text = json.dumps(response_data, indent=2)
+    else:
+        response_text = str(response_data)
+    
+    lines = response_text.split('\n')[:10]  # Limit to 10 lines for display
+    text_height = len(lines) * 14
+    content_height = text_height + BUBBLE_PADDING
+    total_height = content_height
+    
+    svg_lines = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{BUBBLE_WIDTH}" height="{total_height}">',
+        f'  <rect x="0" y="0" width="{BUBBLE_WIDTH}" height="{total_height}" rx="{BORDER_RADIUS}" ry="{BORDER_RADIUS}"',
+        f'        fill="{bg_color}" stroke="{BORDER_COLOR}" stroke-width="{BORDER_WIDTH}"/>',
+    ]
+    
+    y_pos = 6 + BUBBLE_PADDING // 2
+    for line in lines:
+        svg_lines.append(
+            f'  <text x="6" y="{y_pos}" font-family="Courier, monospace" font-size="9" fill="#000000">'
+            f'{_escape_xml(line[:50])}</text>'
+        )
+        y_pos += 14
+    
+    svg_lines.append('</svg>')
+    return '\n'.join(svg_lines), total_height
+
+
+def _escape_xml(text: str) -> str:
+    """Escape XML special characters."""
+    return (text
+            .replace('&', '&amp;')
+            .replace('<', '&lt;')
+            .replace('>', '&gt;')
+            .replace('"', '&quot;')
+            .replace("'", '&apos;'))
 
 
 class MessageBubble(QtWidgets.QFrame):
-    """Message bubble container with rounded edges, selection state, and type overlay.
+    """Message bubble using SVG rendering for deterministic sizing.
     
-    Contains a rounded rectangle frame with configurable background color, optional
-    red border when selected, and a type label overlay at top-left.
-    
-    Content widgets (user instruction, tool request, tool response, etc.) are placed
-    inside the rounded frame.
+    Architecture:
+    - Content stored as SVG string
+    - QSvgWidget renders the SVG
+    - sizeHint() returns exact dimensions from SVG
+    - Streaming updates SVG and re-renders
     """
-
+    
     def __init__(self, msg_type: str = "system", content_widget: Optional[QtWidgets.QWidget] = None, parent=None):
         super().__init__(parent)
         self.msg_type = msg_type
         self.is_selected = False
+        self.current_text = ""
+        self.current_height = 40  # Min height
         
         # Normalize message type
         type_map = {
@@ -314,110 +211,84 @@ class MessageBubble(QtWidgets.QFrame):
             "error": "error",
         }
         self.display_type = type_map.get(msg_type.lower(), "system")
-
-        # Root container with margin for inset effect (3px)
+        
+        # Set bubble size policy
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
+        
+        # Root layout - 12px top padding to separate bubble from parent edge
         root_layout = QtWidgets.QVBoxLayout()
-        root_layout.setContentsMargins(3, 3, 3, 3)
+        root_layout.setContentsMargins(0, 12, 0, 0)  # 12px top padding for overlay space
         root_layout.setSpacing(0)
         self.setLayout(root_layout)
-
-        # Inner rounded visual frame
-        self.rounded_frame = QtWidgets.QFrame(self)
-        self.rounded_frame.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
-        self.rounded_frame.setFrameShadow(QtWidgets.QFrame.Shadow.Plain)
-        self.rounded_frame.setLineWidth(1)
-        self.rounded_frame.setMinimumHeight(80)
-        self.rounded_frame.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.MinimumExpanding)
-
-        bg_color = MESSAGE_COLORS.get(self.display_type, MESSAGE_COLORS["system"])
-        self._update_frame_style(bg_color)
-
-        # Content layout inside the rounded frame
-        frame_layout = QtWidgets.QVBoxLayout()
-        frame_layout.setContentsMargins(0, 0, 0, 0)
-        frame_layout.setSpacing(0)
         
-        if content_widget:
-            frame_layout.addWidget(content_widget, 1)
+        # SVG widget for rendering
+        self.svg_widget = QSvgWidget()
+        self.svg_widget.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
+        root_layout.addWidget(self.svg_widget)
         
-        self.rounded_frame.setLayout(frame_layout)
-        root_layout.addWidget(self.rounded_frame)
-
-        # Type overlay label (positioned absolutely at top-left)
+        # Type overlay label (positioned absolutely at top-left, flush with parent top)
         self.type_overlay = QtWidgets.QLabel(self)
         self.type_overlay.setText(self.display_type.upper())
         self.type_overlay.setStyleSheet(
-            "color: #666666; font-size: 9px; font-weight: bold; background-color: transparent;"
+            "color: #333333; font-size: 8px; font-weight: bold; background-color: #FFFF00; padding: 1px 3px;"
         )
         self.type_overlay.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft)
         self.type_overlay.adjustSize()
-        self.type_overlay.move(4, 4)
+        self.type_overlay.move(2, 0)  # Flush with top of parent
         self.type_overlay.raise_()
-    
-    def _update_frame_style(self, bg_color: str) -> None:
-        """Update the rounded frame background and border style."""
-        border_color = "#ff0000" if self.is_selected else "#888888"
-        border_width = "2px" if self.is_selected else "1px"
-        self.rounded_frame.setStyleSheet(
-            f"""
-            QFrame {{
-                background-color: {bg_color};
-                border: {border_width} solid {border_color};
-                border-radius: 8px;
-            }}
-            """
-        )
-    
-    def set_selected(self, selected: bool) -> None:
-        """Set the selected state; border becomes red when selected."""
-        self.is_selected = selected
-        bg_color = MESSAGE_COLORS.get(self.display_type, MESSAGE_COLORS["system"])
-        self._update_frame_style(bg_color)
+        
+        # Set initial content if provided
+        if content_widget:
+            self.set_content_widget(content_widget)
     
     def set_content_widget(self, content_widget: QtWidgets.QWidget) -> None:
-        """Replace or set the content widget inside the bubble."""
-        layout = self.rounded_frame.layout()
-        if layout is None:
-            layout = QtWidgets.QVBoxLayout()
-            layout.setContentsMargins(0, 0, 0, 0)
-            self.rounded_frame.setLayout(layout)
+        """Set content from a widget (for backwards compatibility).
         
-        # Clear existing widgets
-        while layout.count() > 0:
-            item = layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        This converts the widget to SVG and renders it.
+        """
+        # Extract text from content widget if possible
+        if hasattr(content_widget, 'text'):
+            text = content_widget.text()
+        else:
+            text = "Content"
         
-        # Add new content widget
-        layout.addWidget(content_widget, 1)
+        self.current_text = text
+        svg_str, height = generate_instruction_svg(text, self.display_type, self.display_type.upper())
+        self.current_height = max(40, height)
+        self._render_svg(svg_str)
+    
+    def set_text(self, text: str) -> None:
+        """Set text content and render as SVG."""
+        self.current_text = text
+        svg_str, height = generate_instruction_svg(text, self.display_type, self.display_type.upper())
+        self.current_height = max(40, height)
+        self._render_svg(svg_str)
+        # Update overlay text
+        self.type_overlay.setText(self.display_type.upper())
+        self.type_overlay.adjustSize()
     
     def append_stream_text(self, chunk: str) -> None:
-        """Delegate to content widget's append_text method (for streaming)."""
-        layout = self.rounded_frame.layout()
-        if layout and layout.count() > 0:
-            content_widget = layout.itemAt(0).widget()
-            if content_widget and hasattr(content_widget, 'append_text'):
-                content_widget.append_text(chunk)
+        """Append chunk to text and re-render SVG."""
+        self.current_text += chunk
+        svg_str, height = generate_instruction_svg(self.current_text, self.display_type, self.display_type.upper())
+        self.current_height = max(40, height)
+        self._render_svg(svg_str)
+    
+    def _render_svg(self, svg_string: str) -> None:
+        """Render SVG string in the widget."""
+        try:
+            svg_bytes = svg_string.encode('utf-8')
+            self.svg_widget.load(QtCore.QByteArray(svg_bytes))
+            self.update()
+        except Exception as e:
+            logger.error(f"Failed to render SVG: {e}")
+    
+    def set_selected(self, selected: bool) -> None:
+        """Set selection state (for future use with red border)."""
+        self.is_selected = selected
+        # Could re-render with red border if needed
     
     def sizeHint(self) -> QtCore.QSize:
-        """Return appropriate size for the widget with min/max height constraints.
-        
-        Min height: 32px, Max height: 92px
-        Height grows/shrinks based on content.
-        """
-        MIN_HEIGHT = 32
-        MAX_HEIGHT = 92
-        
-        # Get content widget's size hint
-        layout = self.rounded_frame.layout()
-        if layout and layout.count() > 0:
-            content_widget = layout.itemAt(0).widget()
-            if content_widget:
-                content_hint = content_widget.sizeHint()
-                # Use content's desired height, but constrain between min/max
-                desired_height = content_hint.height() + 10  # Add padding
-                constrained_height = max(MIN_HEIGHT, min(MAX_HEIGHT, desired_height))
-                return QtCore.QSize(380, constrained_height)
-        
-        # Default size with constraints
-        return QtCore.QSize(380, MIN_HEIGHT)
+        """Return size based on SVG dimensions plus 12px top padding."""
+        # Add 12px top padding (layout margin) to bubble height
+        return QtCore.QSize(BUBBLE_WIDTH, self.current_height + 12)
