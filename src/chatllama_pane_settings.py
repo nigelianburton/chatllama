@@ -38,6 +38,7 @@ class SettingsPanel(QtWidgets.QFrame):
 
         # MCP panels will be created per server below
         self.mcp_panels: list[McpInfoPanel] = []
+        self.builtin_mcp_servers: list[dict] = []  # Store built-in MCP configs
 
         # LMS toggle button (will be placed in Settings header row in ChatWindow)
         self.lms_toggle = QtWidgets.QPushButton("LMS")
@@ -96,3 +97,34 @@ class SettingsPanel(QtWidgets.QFrame):
         """Show/hide LM Studio subpanel based on toggle state."""
         if self.lmstudio_panel:
             self.lmstudio_panel.setVisible(bool(checked))
+
+    def register_builtin_mcp(self, server_config: dict) -> None:
+        """Register a built-in MCP server and add it to the UI.
+        
+        Args:
+            server_config: Server configuration dict with name, url, type=builtin
+        """
+        if not server_config:
+            return
+        
+        # Store config
+        self.builtin_mcp_servers.append(server_config)
+        
+        # Create MCP panel for it
+        panel = McpInfoPanel(self.settings, server=server_config)
+        self.mcp_panels.append(panel)
+        
+        # Add to UI - find the scroll content widget and insert before stretch
+        scroll = self.findChild(QtWidgets.QScrollArea)
+        if scroll and scroll.widget():
+            content = scroll.widget()
+            layout = content.layout()
+            if layout:
+                # Insert before the final stretch
+                count = layout.count()
+                if count > 0 and layout.itemAt(count - 1).spacerItem():
+                    layout.insertWidget(count - 1, panel)
+                else:
+                    layout.addWidget(panel)
+        
+        logger.info(f"Registered built-in MCP: {server_config.get('name')}")

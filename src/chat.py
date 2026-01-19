@@ -438,22 +438,57 @@ class ChatWindow(QtWidgets.QMainWindow):
     def start_built_in_mcp_http(self, host: str = "127.0.0.1", port: int = 6821) -> None:
         """Start built-in MCP HTTP server in the background while UI runs."""
         try:
-            from mcp_http_server import ChatLlamaMCPServer
+            from mcp_http_server import SVGLayoutStudioMCP
             rules_path = PROJECT_ROOT / "src" / "cards" / "svg_generation_rules.json"
 
             def ui_dispatch(svg: str) -> None:
                 # Ensure execution on UI thread
                 QtCore.QTimer.singleShot(0, lambda: self._cards_panel.display_svg(svg) if self._cards_panel else None)
 
-            srv = ChatLlamaMCPServer(ui_display_svg=ui_dispatch, rules_path=rules_path, host=host, port=port)
+            srv = SVGLayoutStudioMCP(ui_display_svg=ui_dispatch, rules_path=rules_path, host=host, port=port)
             ok = srv.start()
             if ok:
                 self._mcp_http_server = srv
                 logger.info(f"Built-in MCP HTTP server started on http://{host}:{port}")
+                
+                # Register with Settings panel so it appears in MCP list
+                if self._settings_panel:
+                    server_config = srv.get_server_config()
+                    self._settings_panel.register_builtin_mcp(server_config)
+                    logger.info(f"Built-in MCP registered in Settings panel: {server_config.get('name')}")
+                
+                # Fetch tools and integrate with system prompt
+                self._integrate_builtin_mcp_tools()
             else:
                 logger.error("Failed to start built-in MCP HTTP server")
         except Exception as e:
             logger.error(f"start_built_in_mcp_http error: {e}")
+    
+    def _integrate_builtin_mcp_tools(self) -> None:
+        """Fetch tools from built-in MCP and merge with external MCP tools for advertising."""
+        try:
+            if not self._mcp_http_server:
+                return
+            
+            builtin_tools = self._mcp_http_server.get_tools()
+            if not builtin_tools:
+                logger.warning("Built-in MCP returned no tools")
+                return
+            
+            # Merge with existing MCP tools
+            if self._mcp_tools is None:
+                self._mcp_tools = []
+            
+            # Convert to format expected by _build_tool_prompt
+            for tool in builtin_tools:
+                # Check if already present
+                if any(t.get("name") == tool.get("name") for t in self._mcp_tools):
+                    continue
+                self._mcp_tools.append(tool)
+            
+            logger.info(f"Integrated {len(builtin_tools)} built-in MCP tools; total: {len(self._mcp_tools)}")
+        except Exception as e:
+            logger.error(f"Failed to integrate built-in MCP tools: {e}")
 
 
     def _build_ui(self) -> None:
@@ -1388,18 +1423,39 @@ class ChatWindow(QtWidgets.QMainWindow):
             self._messages[0]["content"] = "You are a helpful assistant."
             return
         
+        # Fetch external MCP tools
         tools = self._fetch_mcp_tools()
+        
+        # Merge with built-in MCP tools if available
+        if self._mcp_http_server:
+            try:
+                builtin_tools = self._mcp_http_server.get_tools()
+                if builtin_tools:
+                    if tools is None:
+                        tools = []
+                    # Merge without duplicates
+                    existing_names = {t.get("name") for t in tools}
+                    for bt in builtin_tools:
+                        if bt.get("name") not in existing_names:
+                            tools.append(bt)
+                    logger.info(f"Merged {len(builtin_tools)} built-in MCP tools with external tools")
+            except Exception as e:
+                logger.error(f"Failed to merge built-in MCP tools: {e}")
+        
         if not tools:
-            logger.warning("No tools fetched from MCP server; system prompt unchanged")
+            logger.warning("No tools fetched from MCP servers; system prompt unchanged")
             self._messages[0]["content"] = "You are a helpful assistant."
             return
         
-        # No need to format tools list - just use the preamble directly
+        # Cache tools for later use
+        self._mcp_tools = tools
+        
+        # Use the preamble directly
         tool_prompt = TOOL_PREAMBLE
         
         # Update system message to include tool information
         self._messages[0]["content"] = f"You are a helpful assistant.\n\n{tool_prompt}"
-        logger.info(f"Integrated {len(tools)} MCP tools into system prompt")
+        logger.info(f"Integrated {len(tools)} total MCP tools into system prompt")
         # Status label removed; no-op on connect
 
     def _parse_tool_request(self, text: str) -> Optional[tuple[str, dict]]:
