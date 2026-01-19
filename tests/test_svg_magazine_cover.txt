@@ -1,0 +1,5 @@
+# Test: LLM creates a magazine cover using built-in MCP tools
+# Start with: python src/chat.py --mcp-http --input-file tests/test_svg_magazine_cover.txt
+
+Create a fashion magazine cover for "Avant Vela" with a spring 2026 theme
+EXIT
