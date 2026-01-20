@@ -1,0 +1,11 @@
+LLAMA_SERVER_PORT = 8014
+LLAMA_SERVER_HOST = "127.0.0.1"
+LLAMA_SERVER_EXE = r"C:\Llama\llama-server.exe"
+GGUF_MODELS_DIR = r"D:\LLM Models"
+DEFAULT_MODEL_DIR = r"D:\LLM Models\mradermacher\Qwen3-VL-8B-Instruct-abliterated-v2.0-GGUF"
+DEFAULT_MODEL_FILE = r"D:\LLM Models\mradermacher\Qwen3-VL-8B-Instruct-abliterated-v2.0-GGUF\Qwen3-VL-8B-Instruct-abliterated-v2.0.Q4_K_S.gguf"
+DEFAULT_MMPROJ_FILE = r"D:\LLM Models\mradermacher\Qwen3-VL-8B-Instruct-abliterated-v2.0-GGUF\Qwen3-VL-8B-Instruct-abliterated-v2.0.mmproj-f16.gguf"
+SETTINGS_WORK = r"C:\llama_simple"
+SETTINGS_HOME = r"T:\llama_simple"
+SETTINGS_DEV = r"D:\_GITN\chatllama\llama_simple"
+SHOW_SAMPLE_MESSAGES = False
