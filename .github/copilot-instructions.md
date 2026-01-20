@@ -38,3 +38,6 @@ Future Plans
 - Add explicit GPU/CPU layer split controls (or presets) so users can balance VRAM vs RAM usage across models.
 - Multi-user router mode can benefit from multiple resident models; for single-user, keep at least one fast small model for tasks like embeddings or quick utility calls.
 
+Recent progress
+- MCP integration now supports both stdio and HTTP servers simultaneously (fashion_stdio 2026 + fashion_http 1960s), and the LLM can route to either.
+

@@ -9,3 +9,5 @@ SETTINGS_WORK = r"C:\llama_simple"
 SETTINGS_HOME = r"T:\llama_simple"
 SETTINGS_DEV = r"D:\_GITN\chatllama\llama_simple"
 SHOW_SAMPLE_MESSAGES = False
+TOGGLE_ON_COLOR = "#cfe8ff"
+TOGGLE_OFF_COLOR = "#f0f0f0"

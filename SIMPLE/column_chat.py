@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Iterable
 
@@ -9,7 +10,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from logger import get_logger
 from column_chat_messages import MessageType, MessageBubble, create_message_widget
-from constants import SHOW_SAMPLE_MESSAGES
+from constants import SHOW_SAMPLE_MESSAGES, TOGGLE_OFF_COLOR, TOGGLE_ON_COLOR
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}
@@ -81,6 +82,9 @@ class AttachmentsBar(QtWidgets.QFrame):
 class ChatColumnWidget(QtWidgets.QWidget):
     model_state_updated = QtCore.pyqtSignal(str)
     stream_chunk_received = QtCore.pyqtSignal(str)
+    tool_call_received = QtCore.pyqtSignal(object)
+    tool_result_received = QtCore.pyqtSignal(object, object)
+    followup_reply_started = QtCore.pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -88,9 +92,13 @@ class ChatColumnWidget(QtWidgets.QWidget):
         self._llama_module = None
         self._chat_server = None
         self._current_receive: MessageBubble | None = None
+        self._current_receive_pending = False
 
         self.model_state_updated.connect(self._update_input_state)
         self.stream_chunk_received.connect(self._append_stream_chunk)
+        self.tool_call_received.connect(self._on_tool_call)
+        self.tool_result_received.connect(self._on_tool_result)
+        self.followup_reply_started.connect(self._on_followup_reply_started)
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -110,6 +118,11 @@ class ChatColumnWidget(QtWidgets.QWidget):
         self._auto_scroll_toggle.setText("Auto-scroll")
         self._auto_scroll_toggle.setCheckable(True)
         self._auto_scroll_toggle.setChecked(True)
+        self._auto_scroll_toggle.setStyleSheet(
+            f"QToolButton {{ background: {TOGGLE_OFF_COLOR}; padding: 4px; }}"
+            f"QToolButton:checked {{ background: {TOGGLE_ON_COLOR}; }}"
+        )
+        self._auto_scroll_toggle.toggled.connect(self._on_auto_scroll_toggled)
         caption_row.addWidget(self._auto_scroll_toggle)
 
         layout.addLayout(caption_row)
@@ -188,6 +201,10 @@ class ChatColumnWidget(QtWidgets.QWidget):
         self._history_layout.insertWidget(self._history_layout.count() - 1, widget)
         self._maybe_scroll_to_bottom()
 
+    def _remove_message(self, widget: MessageBubble) -> None:
+        self._history_layout.removeWidget(widget)
+        widget.deleteLater()
+
     def _add_sample_messages(self) -> None:
         resources_dir = Path(__file__).parent / "resources"
         samples = [
@@ -259,6 +276,9 @@ class ChatColumnWidget(QtWidgets.QWidget):
         try:
             self._chat_server = module.LlamaCppChatServer()
             self._chat_server.register_stream_callback(self._on_stream_chunk)
+            self._chat_server.register_tool_call_callback(self._on_tool_call_callback)
+            self._chat_server.register_tool_result_callback(self._on_tool_result_callback)
+            self._chat_server.register_followup_callback(self._on_followup_callback)
         except Exception as exc:
             self._logger.exception("Failed to initialize chat server: %s", exc)
             self._chat_server = None
@@ -282,6 +302,7 @@ class ChatColumnWidget(QtWidgets.QWidget):
         self._add_message(create_message_widget(MessageType.USER, text, attachments=attachments))
         receive_widget = create_message_widget(MessageType.ASSISTANT, "")
         self._current_receive = receive_widget
+        self._current_receive_pending = True
         self._add_message(receive_widget)
 
         self._prompt_box.clear()
@@ -295,11 +316,65 @@ class ChatColumnWidget(QtWidgets.QWidget):
     def _on_stream_chunk(self, chunk: str) -> None:
         self.stream_chunk_received.emit(chunk)
 
+    def _on_tool_call_callback(self, tool_call: object) -> None:
+        self.tool_call_received.emit(tool_call)
+
+    def _on_tool_result_callback(self, tool_call: object, result: object) -> None:
+        self.tool_result_received.emit(tool_call, result)
+
+    def _on_followup_callback(self) -> None:
+        self.followup_reply_started.emit()
+
     def _append_stream_chunk(self, chunk: str) -> None:
         if not self._current_receive:
             return
+        if self._current_receive_pending:
+            self._logger.info("Assistant received first chunk; clearing pending flag")
+            self._current_receive_pending = False
         self._current_receive.append_text(chunk)
         self._maybe_scroll_to_bottom()
+
+    def _on_tool_call(self, tool_call: object) -> None:
+        name = getattr(tool_call, "name", "tool")
+        args = getattr(tool_call, "arguments", {})
+        if self._current_receive is not None:
+            existing_text = self._current_receive.get_text()
+            self._logger.info(
+                "Tool call UI: assistant text length=%d pending=%s",
+                len(existing_text),
+                self._current_receive_pending,
+            )
+            if self._current_receive_pending:
+                self._logger.info("Tool call UI: removing pending assistant bubble")
+                self._remove_message(self._current_receive)
+                self._current_receive = None
+                self._current_receive_pending = False
+        request = create_message_widget(MessageType.MCP_REQUEST, f"{name}")
+        if isinstance(args, dict) and args:
+            request.set_details([(key, json.dumps(value)) for key, value in args.items()])
+            request.set_details_visible(True)
+        self._add_message(request)
+        if self._current_receive is not None:
+            self._current_receive.set_details([("tool_call", name)])
+            self._current_receive.set_details_visible(True)
+
+    def _on_tool_result(self, tool_call: object, result: object) -> None:
+        name = getattr(tool_call, "name", "tool")
+        response = create_message_widget(MessageType.MCP_RESPONSE, f"{name} result")
+        if isinstance(result, dict) and result:
+            response.set_details([(key, json.dumps(value)) for key, value in result.items()])
+            response.set_details_visible(True)
+        self._add_message(response)
+
+    def _on_followup_reply_started(self) -> None:
+        receive_widget = create_message_widget(MessageType.ASSISTANT, "")
+        self._current_receive = receive_widget
+        self._current_receive_pending = True
+        self._add_message(receive_widget)
+
+    def _on_auto_scroll_toggled(self, checked: bool) -> None:
+        if checked:
+            self._maybe_scroll_to_bottom()
 
     def _maybe_scroll_to_bottom(self) -> None:
         if not self._auto_scroll_toggle.isChecked():

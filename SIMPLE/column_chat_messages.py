@@ -119,6 +119,11 @@ class MessageBubble(QtWidgets.QFrame):
             return
         self._message_label.setText(self._message_label.text() + text)
 
+    def get_text(self) -> str:
+        if not self._message_label:
+            return ""
+        return self._message_label.text()
+
     def set_details(self, rows: Sequence[tuple[str, str]]) -> None:
         while self._details_layout.count():
             item = self._details_layout.takeAt(0)

@@ -16,6 +16,11 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from logger import get_logger
+from tools.mcp_client_manager import MCPClientManager
+from tools.tool_executor import ToolExecutor
+from tools.tool_protocol_base import ToolCall
+from tools.tool_protocol_selector import select_adapter
+from tools.tool_registry import ToolDefinition, ToolRegistry
 from constants import (
     DEFAULT_MODEL_FILE,
     DEFAULT_MMPROJ_FILE,
@@ -677,8 +682,19 @@ class LlamaCppChatServer:
         self._port = port
         self._messages: list[dict] = []
         self._stream_callbacks: list[Callable[[str], None]] = []
+        self._tool_call_callbacks: list[Callable[[ToolCall], None]] = []
+        self._tool_result_callbacks: list[Callable[[ToolCall, object], None]] = []
+        self._followup_callbacks: list[Callable[[], None]] = []
         self._lock = threading.Lock()
         self._stream_log_buffer = ""
+        self._adapter = select_adapter(self._get_chat_template())
+        self._tool_registry = ToolRegistry()
+        self._tool_schemas: list[dict] = []
+        self._tool_system_added = False
+        self._mcp_manager: MCPClientManager | None = None
+        self._tool_executor: ToolExecutor | None = None
+        self._load_fashion_mcp_tools()
+        self._logger.info("MCP tools loaded: %d", len(self._tool_schemas))
 
     @property
     def messages(self) -> list[dict]:
@@ -686,6 +702,15 @@ class LlamaCppChatServer:
 
     def register_stream_callback(self, callback: Callable[[str], None]) -> None:
         self._stream_callbacks.append(callback)
+
+    def register_tool_call_callback(self, callback: Callable[[ToolCall], None]) -> None:
+        self._tool_call_callbacks.append(callback)
+
+    def register_tool_result_callback(self, callback: Callable[[ToolCall, object], None]) -> None:
+        self._tool_result_callbacks.append(callback)
+
+    def register_followup_callback(self, callback: Callable[[], None]) -> None:
+        self._followup_callbacks.append(callback)
 
     def clear_messages(self) -> None:
         with self._lock:
@@ -695,9 +720,13 @@ class LlamaCppChatServer:
         ensure_running()
         self._logger.info("User: %s", text)
         self._stream_log_buffer = ""
+        self._adapter = select_adapter(self._get_chat_template())
         if image_paths:
             for path in image_paths:
                 self._logger.info("User attachment: %s", path)
+        self._ensure_tool_system_message()
+        if self._tool_schemas:
+            self._logger.info("Tool schemas attached: %d", len(self._tool_schemas))
         content = self._build_content(text, image_paths or [])
         user_message = {"role": "user", "content": content}
         assistant_message = {"role": "assistant", "content": ""}
@@ -711,21 +740,58 @@ class LlamaCppChatServer:
             args=(assistant_message,),
             daemon=True,
         )
+        self._logger.info("Starting chat completion thread")
         thread.start()
 
     def _stream_completion(self, assistant_message: dict) -> None:
         url = f"http://{self._host}:{self._port}/v1/chat/completions"
         model_name = _fetch_loaded_model() or "default"
+        self._logger.info("Chat completion request: model=%s", model_name)
+        tool_call_buffer: dict[int, dict[str, str]] = {}
         payload = {
             "model": model_name,
             "messages": self.messages,
             "stream": True,
         }
+        if self._tool_schemas:
+            payload["tools"] = self._tool_schemas
         data = json.dumps(payload).encode("utf-8")
         for attempt in range(2):
             request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+            start_time = time.monotonic()
             try:
-                with urllib.request.urlopen(request, timeout=120) as response:
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    content_type = response.headers.get("Content-Type", "")
+                    if "text/event-stream" not in content_type:
+                        body = response.read().decode("utf-8")
+                        self._logger.info(
+                            "Chat response non-streaming (Content-Type=%s, bytes=%d)",
+                            content_type,
+                            len(body),
+                        )
+                        try:
+                            payload = json.loads(body) if body else {}
+                        except json.JSONDecodeError:
+                            self._logger.warning("Chat response non-streaming JSON parse failed")
+                            payload = {}
+                        message_text = self._extract_message_content(payload)
+                        tool_calls = self._extract_tool_calls(payload)
+                        if tool_calls:
+                            self._logger.info("Chat response tool calls: %d", len(tool_calls))
+                            self._handle_tool_calls(tool_calls)
+                        if message_text:
+                            with self._lock:
+                                assistant_message["content"] += message_text
+                            self._log_stream_delta(message_text)
+                            self._emit_stream_chunk(message_text)
+                        else:
+                            snippet = body[:500] if body else ""
+                            self._logger.warning(
+                                "Chat response non-streaming contained no message content: %s",
+                                snippet,
+                            )
+                        self._flush_stream_log()
+                        return
                     for raw_line in response:
                         line = raw_line.decode("utf-8").strip()
                         if not line or not line.startswith("data:"):
@@ -737,6 +803,7 @@ class LlamaCppChatServer:
                             payload = json.loads(chunk)
                         except json.JSONDecodeError:
                             continue
+                        self._accumulate_tool_calls(payload, tool_call_buffer)
                         delta = self._extract_delta(payload)
                         if not delta:
                             continue
@@ -745,6 +812,12 @@ class LlamaCppChatServer:
                         self._log_stream_delta(delta)
                         self._emit_stream_chunk(delta)
                 self._flush_stream_log()
+                tool_calls = self._finalize_tool_calls(tool_call_buffer)
+                if tool_calls:
+                    self._logger.info("Chat response tool calls: %d", len(tool_calls))
+                    self._handle_tool_calls(tool_calls)
+                else:
+                    self._detect_tool_calls(assistant_message.get("content", ""))
                 return
             except urllib.error.HTTPError as err:
                 body = err.read().decode("utf-8")
@@ -760,7 +833,8 @@ class LlamaCppChatServer:
                 self._flush_stream_log()
                 return
             except Exception as exc:
-                self._logger.error("Chat stream failed: %s", exc)
+                elapsed = time.monotonic() - start_time
+                self._logger.error("Chat stream failed after %.1fs: %s", elapsed, exc)
                 self._flush_stream_log()
                 return
 
@@ -795,6 +869,128 @@ class LlamaCppChatServer:
             self._logger.info("Assistant: %s", self._stream_log_buffer)
             self._stream_log_buffer = ""
 
+    def _detect_tool_calls(self, text: str) -> None:
+        if not text:
+            return
+        try:
+            calls = self._adapter.parse_tool_calls(text)
+        except Exception:
+            return
+        if not calls:
+            return
+        for call in calls:
+            self._logger.info("Tool call detected: %s", call.name)
+            for callback in self._tool_call_callbacks:
+                try:
+                    callback(call)
+                except Exception:
+                    continue
+        self._handle_tool_calls(calls)
+
+    def _handle_tool_calls(self, calls: list[ToolCall]) -> None:
+        executor = self._tool_executor
+        if executor is None:
+            return
+        for call in calls:
+            for callback in self._tool_call_callbacks:
+                try:
+                    callback(call)
+                except Exception:
+                    continue
+            try:
+                result = executor.execute(call)
+            except Exception as exc:
+                result = {"error": str(exc)}
+            for callback in self._tool_result_callbacks:
+                try:
+                    callback(call, result)
+                except Exception:
+                    continue
+            with self._lock:
+                self._messages.append({"role": "tool", "content": json.dumps(result)})
+        followup_message = {"role": "assistant", "content": ""}
+        with self._lock:
+            self._messages.append(followup_message)
+        for callback in self._followup_callbacks:
+            try:
+                callback()
+            except Exception:
+                continue
+        self._stream_completion(followup_message)
+
+    def _load_fashion_mcp_tools(self) -> None:
+        stdio_path = Path(__file__).parent / "test_mcp" / "fashion_stdio.py"
+        server_url = "http://127.0.0.1:6820/mcp"
+        if not stdio_path.exists():
+            return
+        config = {
+            "mcpServers": {
+                "fashion_stdio": {
+                    "transport": "stdio",
+                    "command": sys.executable,
+                    "args": [str(stdio_path)],
+                },
+                "fashion_http": {
+                    "transport": "http",
+                    "url": server_url,
+                },
+            }
+        }
+        try:
+            manager = MCPClientManager(config)
+            tools = manager.list_tools()
+        except Exception as exc:
+            self._logger.warning("Failed to load MCP tools: %s", exc)
+            return
+        registry = ToolRegistry()
+        schemas: list[dict] = []
+        for tool in tools:
+            name = getattr(tool, "name", None) or tool.get("name")
+            description = getattr(tool, "description", None) or tool.get("description") or ""
+            input_schema = (
+                getattr(tool, "inputSchema", None)
+                or tool.get("inputSchema")
+                or tool.get("parameters")
+                or {"type": "object", "properties": {}}
+            )
+            if not name:
+                continue
+            schema = {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": description,
+                    "parameters": input_schema,
+                },
+            }
+            registry.register(ToolDefinition(name=name, schema=schema, source="mcp"))
+            schemas.append(schema)
+        self._mcp_manager = manager
+        self._tool_registry = registry
+        self._tool_schemas = schemas
+        self._tool_executor = ToolExecutor(registry, manager)
+        self._logger.info("Loaded MCP tools from stdio+http")
+
+    def _ensure_tool_system_message(self) -> None:
+        if self._tool_system_added or not self._tool_schemas:
+            return
+        rendered = self._adapter.render_tools(self._tool_schemas, None)
+        if not rendered:
+            return
+        system_message = {"role": "system", "content": rendered}
+        with self._lock:
+            self._messages.insert(0, system_message)
+        self._tool_system_added = True
+
+    def _get_chat_template(self) -> str | None:
+        model_name = _fetch_loaded_model()
+        settings = _load_settings()
+        cache = settings.get("model_cache", {})
+        entry = cache.get(model_name or "") if model_name else None
+        if isinstance(entry, dict):
+            return entry.get("chat_template")
+        return None
+
     def _extract_delta(self, payload: dict) -> str:
         choices = payload.get("choices")
         if not choices:
@@ -806,6 +1002,68 @@ class LlamaCppChatServer:
             return content
         message = choice.get("message") or {}
         return message.get("content") or ""
+
+    def _extract_message_content(self, payload: dict) -> str:
+        choices = payload.get("choices")
+        if not choices:
+            return ""
+        choice = choices[0]
+        message = choice.get("message") or {}
+        content = message.get("content")
+        if content:
+            return content
+        return self._extract_delta(payload)
+
+    def _extract_tool_calls(self, payload: dict) -> list[ToolCall]:
+        choices = payload.get("choices") or []
+        if not choices:
+            return []
+        message = (choices[0].get("message") or {})
+        return self._parse_tool_calls_list(message.get("tool_calls") or [])
+
+    def _accumulate_tool_calls(self, payload: dict, buffer: dict[int, dict[str, str]]) -> None:
+        choices = payload.get("choices") or []
+        if not choices:
+            return
+        delta = choices[0].get("delta") or {}
+        tool_calls = delta.get("tool_calls") or []
+        for item in tool_calls:
+            index = item.get("index", 0)
+            function = item.get("function") or {}
+            name = function.get("name")
+            arguments = function.get("arguments") or ""
+            entry = buffer.setdefault(index, {"name": "", "arguments": ""})
+            if name:
+                entry["name"] = name
+            if arguments:
+                entry["arguments"] += arguments
+
+    def _finalize_tool_calls(self, buffer: dict[int, dict[str, str]]) -> list[ToolCall]:
+        calls: list[ToolCall] = []
+        for entry in buffer.values():
+            name = entry.get("name") or ""
+            raw_args = entry.get("arguments") or "{}"
+            try:
+                args = json.loads(raw_args)
+            except json.JSONDecodeError:
+                args = {}
+            if name:
+                calls.append(ToolCall(name=name, arguments=args, raw=raw_args))
+        return calls
+
+    def _parse_tool_calls_list(self, tool_calls: list[dict]) -> list[ToolCall]:
+        calls: list[ToolCall] = []
+        for item in tool_calls:
+            function = item.get("function") or {}
+            name = function.get("name") or ""
+            raw_args = function.get("arguments") or "{}"
+            try:
+                args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+            except json.JSONDecodeError:
+                args = {}
+            if name:
+                calls.append(ToolCall(name=name, arguments=args, raw=str(raw_args)))
+        return calls
 
     def _build_content(self, text: str, image_paths: list[Path]) -> object:
         if not image_paths:

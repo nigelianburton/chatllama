@@ -15,7 +15,7 @@ from cards.svg_card import SVGCard
 from column_chat import ChatColumnWidget
 from column_cards import ColumnCardsWidget
 from column_settings import ColumnSettingsWidget
-from constants import SETTINGS_DEV, SETTINGS_HOME, SETTINGS_WORK
+from constants import SETTINGS_DEV, SETTINGS_HOME, SETTINGS_WORK, TOGGLE_OFF_COLOR, TOGGLE_ON_COLOR
 
 
 class UiBridge(QtCore.QObject):
@@ -108,6 +108,11 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
         self._top_toolbar = top_toolbar
         main_layout.addWidget(top_toolbar)
 
+        self._toggle_style = (
+            f"QToolButton {{ background: {TOGGLE_OFF_COLOR}; padding: 4px; }}"
+            f"QToolButton:checked {{ background: {TOGGLE_ON_COLOR}; }}"
+        )
+
         self._splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         main_layout.addWidget(self._splitter, 1)
 
@@ -165,6 +170,7 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
         toggle.setText(name)
         toggle.setCheckable(True)
         toggle.setChecked(True)
+        toggle.setStyleSheet(self._toggle_style)
         toggle.clicked.connect(lambda checked, n=name: on_toggle(checked))
         self._top_toolbar.addWidget(toggle)
         self._toggle_buttons[name] = toggle

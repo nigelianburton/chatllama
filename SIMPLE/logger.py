@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import logging
 import sys
 from dataclasses import dataclass
@@ -91,6 +92,56 @@ class _StreamToLogger:
         return getattr(self._stream, "errors", "replace")
 
 
+class _CollapsingHandler(logging.Handler):
+    def __init__(self, handler: logging.Handler) -> None:
+        super().__init__(handler.level)
+        self._handler = handler
+        self._last_record: logging.LogRecord | None = None
+        self._last_key: tuple | None = None
+        self._count = 0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        key = (record.levelno, record.name, record.getMessage(), getattr(record, "classname", None))
+        if self._last_key is None:
+            self._last_key = key
+            self._last_record = record
+            self._count = 1
+            return
+        if key == self._last_key:
+            self._count += 1
+            return
+        self._flush_last()
+        self._last_key = key
+        self._last_record = record
+        self._count = 1
+
+    def _flush_last(self) -> None:
+        if self._last_record is None:
+            return
+        record = self._last_record
+        if self._count > 1:
+            message = record.getMessage() + f" ({self._count})"
+            record = logging.makeLogRecord({**record.__dict__, "msg": message, "args": ()})
+        try:
+            self._handler.emit(record)
+        except Exception:
+            self.handleError(record)
+
+    def flush(self) -> None:
+        self._flush_last()
+        self._last_record = None
+        self._last_key = None
+        self._count = 0
+        self._handler.flush()
+
+    def close(self) -> None:
+        try:
+            self.flush()
+        finally:
+            self._handler.close()
+            super().close()
+
+
 def configure_logging(settings_folder: Path) -> LogConfig:
     logs_dir = settings_folder / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -113,13 +164,22 @@ def configure_logging(settings_folder: Path) -> LogConfig:
 
     classname_filter = _ClassnameFilter()
     quiet_filter = _QuietFilter({"fastmcp", "mcp", "uvicorn", "pydocket", "redis", "httpx", "httpcore"})
-    file_handler.addFilter(classname_filter)
-    console_handler.addFilter(classname_filter)
-    file_handler.addFilter(quiet_filter)
-    console_handler.addFilter(quiet_filter)
+    collapsing_file_handler = _CollapsingHandler(file_handler)
+    collapsing_console_handler = _CollapsingHandler(console_handler)
 
-    root_logger.addHandler(file_handler)
-    root_logger.addHandler(console_handler)
+    collapsing_file_handler.setFormatter(formatter)
+    collapsing_console_handler.setFormatter(formatter)
+
+    collapsing_file_handler.addFilter(classname_filter)
+    collapsing_console_handler.addFilter(classname_filter)
+    collapsing_file_handler.addFilter(quiet_filter)
+    collapsing_console_handler.addFilter(quiet_filter)
+
+    root_logger.addHandler(collapsing_file_handler)
+    root_logger.addHandler(collapsing_console_handler)
+
+    atexit.register(collapsing_file_handler.flush)
+    atexit.register(collapsing_console_handler.flush)
 
     for noisy in ("fastmcp", "mcp", "uvicorn", "pydocket", "redis", "httpx", "httpcore"):
         logging.getLogger(noisy).setLevel(logging.INFO)
