@@ -28,3 +28,13 @@ SIMPLE key files overview
 - SIMPLE/constants.py: paths and default model settings
 - testers/svg_mcp_tester.py: MCP client test for SVG cards
 
+Known minor issues
+- Chat input box auto-resize beyond ~3 lines is not working; QTextEdit remains at minimum height and shows a scrollbar instead.
+
+Future Plans
+- Router mode can keep multiple models loaded concurrently (feature), but on 16GB GPUs this can exhaust VRAM and spill layers to system RAM, causing major slowdowns.
+- Add a Settings-pane control to regulate concurrent model residency (e.g., max loaded models or VRAM budget guardrail).
+- Capture per-model VRAM usage (dependent on context size and GPU offload) and store with model metadata in settings to predict whether a new load will exceed GPU capacity.
+- Add explicit GPU/CPU layer split controls (or presets) so users can balance VRAM vs RAM usage across models.
+- Multi-user router mode can benefit from multiple resident models; for single-user, keep at least one fast small model for tasks like embeddings or quick utility calls.
+

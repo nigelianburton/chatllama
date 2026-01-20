@@ -97,12 +97,13 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
         self._status_text = QtWidgets.QLabel("50%")
         self._status_text.setFixedWidth(50)
         self._status_text.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self._status_text.setVisible(False)
         top_toolbar.addWidget(self._status_text)
 
         self._progress = QtWidgets.QProgressBar()
         self._progress.setFixedWidth(150)
         self._progress.setRange(0, 100)
-        self._progress.setValue(50)
+        self._progress.setValue(0)
         top_toolbar.addWidget(self._progress)
         self._top_toolbar = top_toolbar
         main_layout.addWidget(top_toolbar)
@@ -115,6 +116,10 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
         self._toggle_buttons: Dict[str, QtWidgets.QToolButton] = {}
 
         self._settings_container = ColumnSettingsWidget(settings_folder)
+        self._settings_container.model_load_started.connect(self._on_model_load_started)
+        self._settings_container.model_load_finished.connect(self._on_model_load_finished)
+        self._settings_container.cache_warm_started.connect(self._on_cache_warm_started)
+        self._settings_container.cache_warm_finished.connect(self._on_cache_warm_finished)
         self._add_column("Settings", "#f7e0e0", content_widget=self._settings_container)
         self._chat_container = ChatColumnWidget()
         self._add_column("Chat", "#e0f7e0", content_widget=self._chat_container)
@@ -123,6 +128,22 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
         self._add_column("Cards", "#e0e8f7", content_widget=self._cards_container)
 
         self._apply_splitter_sizes()
+
+    def _on_model_load_started(self) -> None:
+        self._progress.setRange(0, 0)
+        self._progress.setValue(0)
+
+    def _on_model_load_finished(self, success: bool) -> None:
+        self._progress.setRange(0, 100)
+        self._progress.setValue(0)
+
+    def _on_cache_warm_started(self) -> None:
+        self._progress.setRange(0, 0)
+        self._progress.setValue(0)
+
+    def _on_cache_warm_finished(self) -> None:
+        self._progress.setRange(0, 100)
+        self._progress.setValue(0)
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:
         super().showEvent(event)

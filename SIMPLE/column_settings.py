@@ -11,12 +11,21 @@ from constants import DEFAULT_MODEL_FILE
 
 
 class ColumnSettingsWidget(QtWidgets.QWidget):
+    model_load_started = QtCore.pyqtSignal()
+    model_load_finished = QtCore.pyqtSignal(bool)
+    cache_warm_started = QtCore.pyqtSignal()
+    cache_warm_finished = QtCore.pyqtSignal()
+
     def __init__(self, settings_folder: Path) -> None:
         super().__init__()
         self._logger = get_logger(self)
         self._settings_folder = settings_folder
         self._model_items: list[tuple[str, str]] = []
         self._llama_module = None
+        self._load_thread: QtCore.QThread | None = None
+        self._load_worker: QtCore.QObject | None = None
+        self._last_model_state: tuple[str, str] | None = None
+        self._last_load_enabled: bool | None = None
         self._ensure_settings_file()
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -91,6 +100,8 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
 
         module.register_models_callback(self._on_models_discovered)
         module.register_model_state_callback(self._on_model_state)
+        if hasattr(module, "register_cache_warm_callback"):
+            module.register_cache_warm_callback(self._on_cache_warm_state)
 
     def _on_models_discovered(self, models: list, loaded_model: str | None) -> None:
         self._logger.info("Discovered %d models", len(models))
@@ -113,9 +124,20 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
             QtCore.Q_ARG(object, model_name),
         )
 
+    def _on_cache_warm_state(self, state: str) -> None:
+        QtCore.QMetaObject.invokeMethod(
+            self,
+            "_cache_warm_state_slot",
+            QtCore.Qt.ConnectionType.QueuedConnection,
+            QtCore.Q_ARG(str, state),
+        )
+
     def _update_model_status(self, state: str, model_name: str | None) -> None:
         name = model_name or "None"
-        self._logger.info("Model state update: %s (%s)", name, state)
+        new_state = (name, state)
+        if new_state != self._last_model_state:
+            self._logger.info("Model state update: %s (%s)", name, state)
+            self._last_model_state = new_state
         self._model_status.setText(f"Model: {name} ({state})")
 
     @QtCore.pyqtSlot(object, object)
@@ -125,6 +147,13 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
     @QtCore.pyqtSlot(str, object)
     def _update_model_status_slot(self, state: str, model_name: str | None) -> None:
         self._update_model_status(state, model_name)
+
+    @QtCore.pyqtSlot(str)
+    def _cache_warm_state_slot(self, state: str) -> None:
+        if state == "start":
+            self.cache_warm_started.emit()
+        elif state == "end":
+            self.cache_warm_finished.emit()
 
     def _populate_models(self, models: list, loaded_model: str | None) -> None:
         self._logger.info("Populating models list: %d items", len(models))
@@ -140,11 +169,11 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         for model in models:
             name = getattr(model, "name", None)
             folder = getattr(model, "folder", None)
-            if not name or not folder:
+            if not name:
                 self._logger.info("Skipping model entry name=%s folder=%s", name, folder)
                 continue
-            self._model_combo.addItem(name, userData=folder)
-            self._model_items.append((name, folder))
+            self._model_combo.addItem(name, userData=folder or "")
+            self._model_items.append((name, folder or ""))
 
         has_models = self._model_combo.count() > 0
         self._model_combo.setEnabled(has_models)
@@ -181,7 +210,9 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
     def _refresh_load_button(self) -> None:
         has_models = self._model_combo.count() > 0
         self._load_button.setEnabled(has_models)
-        self._logger.info("Load button enabled=%s (count=%d)", has_models, self._model_combo.count())
+        if self._last_load_enabled != has_models:
+            self._logger.info("Load button enabled=%s (count=%d)", has_models, self._model_combo.count())
+            self._last_load_enabled = has_models
 
     def _on_load_clicked(self) -> None:
         self._logger.info("Load button clicked (enabled=%s)", self._load_button.isEnabled())
@@ -198,7 +229,50 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
             candidate = Path(folder) / f"{name}.gguf"
             model_path = str(candidate) if candidate.exists() else str(Path(folder) / name)
         model_ref = model_path or name
-        try:
-            self._llama_module.load_model(model_ref)
-        except Exception as exc:
-            self._logger.error("Model load failed: %s", exc)
+        self._start_model_load(model_ref)
+
+    def _start_model_load(self, model_ref: str) -> None:
+        if self._load_thread is not None:
+            self._logger.info("Model load already in progress")
+            return
+
+        self.model_load_started.emit()
+
+        class _Worker(QtCore.QObject):
+            finished = QtCore.pyqtSignal(bool, object)
+
+            def __init__(self, module, ref: str) -> None:
+                super().__init__()
+                self._module = module
+                self._ref = ref
+
+            @QtCore.pyqtSlot()
+            def run(self) -> None:
+                success = False
+                error = None
+                try:
+                    self._module.load_model(self._ref)
+                    success = True
+                except Exception as exc:
+                    error = exc
+                self.finished.emit(success, error)
+
+        thread = QtCore.QThread(self)
+        worker = _Worker(self._llama_module, model_ref)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_load_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._load_thread = thread
+        self._load_worker = worker
+        thread.start()
+
+    @QtCore.pyqtSlot(bool, object)
+    def _on_load_finished(self, success: bool, error: object) -> None:
+        if error is not None:
+            self._logger.error("Model load failed: %s", error)
+        self._load_thread = None
+        self._load_worker = None
+        self.model_load_finished.emit(success)

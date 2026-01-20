@@ -92,11 +92,7 @@ class _StreamToLogger:
 
 
 def configure_logging(settings_folder: Path) -> LogConfig:
-    if str(settings_folder) == SETTINGS_DEV:
-        repo_root = Path(__file__).resolve().parents[1]
-        logs_dir = repo_root / "logs"
-    else:
-        logs_dir = settings_folder / "logs"
+    logs_dir = settings_folder / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     log_file = logs_dir / f"session_{timestamp}.log"

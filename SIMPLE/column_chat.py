@@ -149,9 +149,6 @@ class ChatColumnWidget(QtWidgets.QWidget):
         self._prompt_box.setEnabled(False)
         self._prompt_box.setStyleSheet("QTextEdit { border: 2px solid #000; }")
         self._prompt_box.sendRequested.connect(self._on_send_clicked)
-        self._prompt_box.setSizeAdjustPolicy(
-            QtWidgets.QAbstractScrollArea.SizeAdjustPolicy.AdjustToContents
-        )
         self._prompt_box.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Minimum,
@@ -314,6 +311,18 @@ class ChatColumnWidget(QtWidgets.QWidget):
 class ChatInputBox(QtWidgets.QTextEdit):
     sendRequested = QtCore.pyqtSignal()
 
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setMinimumHeight(48)
+        self.setMaximumHeight(108)
+        self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Minimum,
+        )
+        self.document().contentsChanged.connect(self._update_height)
+        self._update_height()
+
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
         if event.key() in (QtCore.Qt.Key.Key_Return, QtCore.Qt.Key.Key_Enter):
             modifiers = event.modifiers()
@@ -324,5 +333,25 @@ class ChatInputBox(QtWidgets.QTextEdit):
             self.sendRequested.emit()
             return
         super().keyPressEvent(event)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self.document().setTextWidth(self.viewport().width())
+        self._update_height()
+
+    def _update_height(self) -> None:
+        self.document().setTextWidth(self.viewport().width())
+        doc_height = self.document().documentLayout().documentSize().height()
+        margins = self.contentsMargins()
+        frame = self.frameWidth()
+        target = int(doc_height + margins.top() + margins.bottom() + 2 * frame + 6)
+        min_h = self.minimumHeight()
+        max_h = self.maximumHeight()
+        clamped = max(min_h, min(target, max_h))
+        self.setFixedHeight(clamped)
+        if target > max_h:
+            self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        else:
+            self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
 
