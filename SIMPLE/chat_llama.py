@@ -15,7 +15,16 @@ from cards.svg_card import SVGCard
 from column_chat import ChatColumnWidget
 from column_cards import ColumnCardsWidget
 from column_settings import ColumnSettingsWidget
-from constants import SETTINGS_DEV, SETTINGS_HOME, SETTINGS_WORK, TOGGLE_OFF_COLOR, TOGGLE_ON_COLOR
+from constants import (
+    HEADER_COLOR_FAULT,
+    HEADER_COLOR_LOADING,
+    HEADER_COLOR_READY,
+    SETTINGS_DEV,
+    SETTINGS_HOME,
+    SETTINGS_WORK,
+    TOGGLE_OFF_COLOR,
+    TOGGLE_ON_COLOR,
+)
 
 
 class UiBridge(QtCore.QObject):
@@ -29,7 +38,13 @@ class UiBridge(QtCore.QObject):
 
 
 class ColumnPanel(QtWidgets.QFrame):
-    def __init__(self, title: str, color: str, content_widget: Optional[QtWidgets.QWidget] = None) -> None:
+    def __init__(
+        self,
+        title: str,
+        color: str,
+        content_widget: Optional[QtWidgets.QWidget] = None,
+        header_color: Optional[str] = None,
+    ) -> None:
         super().__init__()
         self._logger = get_logger(self)
 
@@ -40,9 +55,10 @@ class ColumnPanel(QtWidgets.QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        toolbar = QtWidgets.QToolBar()
-        toolbar.setIconSize(QtCore.QSize(16, 16))
-        toolbar.setMovable(False)
+        self._toolbar = QtWidgets.QToolBar()
+        self._toolbar.setIconSize(QtCore.QSize(16, 16))
+        self._toolbar.setMovable(False)
+        self._toolbar.setStyleSheet(f"background-color: {header_color or color};")
 
         title_label = QtWidgets.QLabel(title)
         title_label.setStyleSheet("font-weight: bold; padding: 4px;")
@@ -50,16 +66,19 @@ class ColumnPanel(QtWidgets.QFrame):
         spacer = QtWidgets.QWidget()
         spacer.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
 
-        toolbar.addWidget(title_label)
-        toolbar.addWidget(spacer)
+        self._toolbar.addWidget(title_label)
+        self._toolbar.addWidget(spacer)
 
-        layout.addWidget(toolbar)
+        layout.addWidget(self._toolbar)
 
         if content_widget is None:
             content = QtWidgets.QLabel(f"{title} content")
             content.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             content_widget = content
         layout.addWidget(content_widget, 1)
+
+    def set_header_color(self, color: str) -> None:
+        self._toolbar.setStyleSheet(f"background-color: {color};")
 
 
 
@@ -86,7 +105,9 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
 
         top_toolbar = QtWidgets.QToolBar()
         top_toolbar.setMovable(False)
-        top_toolbar.addWidget(QtWidgets.QLabel("ChatLlama"))
+        self._model_title = QtWidgets.QLabel("Model: None")
+        self._model_title.setStyleSheet("font-weight: bold;")
+        top_toolbar.addWidget(self._model_title)
 
         toolbar_spacer = QtWidgets.QWidget()
         toolbar_spacer.setSizePolicy(
@@ -121,12 +142,15 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
         self._toggle_buttons: Dict[str, QtWidgets.QToolButton] = {}
 
         self._settings_container = ColumnSettingsWidget(settings_folder)
+        self._settings_container.model_state_updated.connect(self._on_model_state_updated)
         self._settings_container.model_load_started.connect(self._on_model_load_started)
         self._settings_container.model_load_finished.connect(self._on_model_load_finished)
         self._settings_container.cache_warm_started.connect(self._on_cache_warm_started)
         self._settings_container.cache_warm_finished.connect(self._on_cache_warm_finished)
+        self._settings_container.model_changed.connect(self._on_model_changed)
         self._add_column("Settings", "#f7e0e0", content_widget=self._settings_container)
         self._chat_container = ChatColumnWidget()
+        self._chat_container.model_state_updated.connect(self._on_model_state_updated)
         self._add_column("Chat", "#e0f7e0", content_widget=self._chat_container)
         self._cards_container = ColumnCardsWidget()
         self._cards_layout = self._cards_container.cards_layout
@@ -142,6 +166,9 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
 
+    def _on_model_changed(self, model_name: str) -> None:
+        self._model_title.setText(f"Model: {model_name}" if model_name else "Model: None")
+
     def _on_cache_warm_started(self) -> None:
         self._progress.setRange(0, 0)
         self._progress.setValue(0)
@@ -150,18 +177,45 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
 
+    def _on_model_state_updated(self, state: str) -> None:
+        settings_color, chat_color = self._get_header_colors_for_state(state)
+        self._set_column_header_color("Settings", settings_color)
+        self._set_column_header_color("Chat", chat_color)
+
+    def _get_header_colors_for_state(self, state: str) -> tuple[str, str]:
+        if state == "Ready":
+            return HEADER_COLOR_READY, HEADER_COLOR_READY
+        if state == "Waiting":
+            return HEADER_COLOR_READY, HEADER_COLOR_LOADING
+        if state == "Loading":
+            return HEADER_COLOR_LOADING, HEADER_COLOR_LOADING
+        if state == "Fault":
+            return HEADER_COLOR_FAULT, HEADER_COLOR_FAULT
+        return HEADER_COLOR_FAULT, HEADER_COLOR_FAULT
+
+    def _set_column_header_color(self, name: str, color: str) -> None:
+        panel = self._columns.get(name)
+        if isinstance(panel, ColumnPanel):
+            panel.set_header_color(color)
+
     def showEvent(self, event: QtGui.QShowEvent) -> None:
         super().showEvent(event)
         QtCore.QTimer.singleShot(0, self._start_mcp_server)
 
-    def _add_column(self, name: str, color: str, content_widget: Optional[QtWidgets.QWidget] = None) -> None:
+    def _add_column(
+        self,
+        name: str,
+        color: str,
+        content_widget: Optional[QtWidgets.QWidget] = None,
+        header_color: Optional[str] = None,
+    ) -> None:
         def on_toggle(checked: bool) -> None:
             self._column_visible[name] = checked
             widget = self._columns[name]
             widget.setVisible(checked)
             self._apply_splitter_sizes()
 
-        panel = ColumnPanel(name, color, content_widget=content_widget)
+        panel = ColumnPanel(name, color, content_widget=content_widget, header_color=header_color)
         self._splitter.addWidget(panel)
         self._columns[name] = panel
         self._column_visible[name] = True

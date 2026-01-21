@@ -11,6 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import sys
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional
@@ -53,6 +54,11 @@ _settings_data: dict | None = None
 _settings_path: Path | None = None
 _models_preset_path: Path | None = None
 _active_model: Optional[str] = None
+_launch_lock = threading.Lock()
+_launch_in_progress = False
+_init_lock = threading.Lock()
+_init_in_progress = False
+_init_complete = False
 
 
 def is_running() -> bool:
@@ -92,7 +98,8 @@ def launch_server() -> Optional[subprocess.Popen]:
             LLAMA_SERVER_HOST,
             LLAMA_SERVER_PORT,
         )
-        return subprocess.Popen(
+        _logger.info("llama-server launch stack:\n%s", "".join(traceback.format_stack(limit=8)))
+        process = subprocess.Popen(
             [
                 LLAMA_SERVER_EXE,
                 "--models-preset",
@@ -103,6 +110,8 @@ def launch_server() -> Optional[subprocess.Popen]:
                 str(LLAMA_SERVER_PORT),
             ]
         )
+        _logger.info("llama-server launch started (pid=%s)", process.pid)
+        return process
     except Exception as exc:
         _logger.exception("Failed to launch llama-server: %s", exc)
         return None
@@ -110,6 +119,8 @@ def launch_server() -> Optional[subprocess.Popen]:
 
 def ensure_running() -> bool:
     _logger.info("Ensure llama-server running")
+    if not _ensure_single_llama_process():
+        return False
     if is_running():
         if not is_router_mode():
             _logger.info("llama-server running in non-router mode; restarting")
@@ -117,13 +128,117 @@ def ensure_running() -> bool:
         else:
             _logger.info("llama-server already running")
             return True
+    with _launch_lock:
+        global _launch_in_progress
+        if _launch_in_progress:
+            _logger.warning("llama-server launch already in progress; skipping duplicate launch")
+            return _wait_for_health()
+        _launch_in_progress = True
     _logger.info("llama-server not running; launching")
     process = launch_server()
     if process is None:
         _logger.info("llama-server launch failed")
+        with _launch_lock:
+            _launch_in_progress = False
         return False
     _logger.info("llama-server launch process started")
-    return True
+    if _wait_for_health():
+        with _launch_lock:
+            _launch_in_progress = False
+        return True
+    _logger.info("llama-server failed to become healthy after launch")
+    with _launch_lock:
+        _launch_in_progress = False
+    return False
+
+
+def _get_llama_server_pids() -> list[str]:
+    if sys.platform != "win32":
+        return []
+    try:
+        output = subprocess.check_output(
+            [
+                "powershell",
+                "-Command",
+                "Get-Process -Name llama-server -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id",
+            ],
+            text=True,
+        )
+    except Exception:
+        return []
+    return [line.strip() for line in output.splitlines() if line.strip()]
+
+
+def _ensure_single_llama_process() -> bool:
+    if sys.platform != "win32":
+        return True
+    pids = _get_llama_server_pids()
+    if not pids:
+        _logger.info("llama-server discovery: no running processes found")
+        return True
+    if len(pids) == 1:
+        _logger.info("llama-server discovery: one running process found (pid=%s)", pids[0])
+        return True
+    _logger.warning("llama-server discovery: %s running processes found (pids=%s)", len(pids), ", ".join(pids))
+    try:
+        from PyQt6 import QtCore, QtWidgets
+    except Exception:
+        _logger.warning("PyQt unavailable; stopping all llama-server processes")
+        stop_server()
+        return True
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        _logger.warning("No QApplication; stopping all llama-server processes")
+        stop_server()
+        return True
+
+    def _show_dialog() -> QtWidgets.QMessageBox.StandardButton:
+        message = QtWidgets.QMessageBox()
+        message.setWindowTitle("Error")
+        message.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        message.setText(f"Error {len(pids)} llama-servers are running.")
+        message.setInformativeText("Stop them ?")
+        message.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        message.setStandardButtons(
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
+        )
+        message.setStyleSheet("QLabel { color: #000000; }")
+        return QtWidgets.QMessageBox.StandardButton(message.exec())
+
+    if QtCore.QThread.currentThread() != app.thread():
+        result_box: dict[str, QtWidgets.QMessageBox.StandardButton | None] = {"result": None}
+
+        class _DialogRunner(QtCore.QObject):
+            @QtCore.pyqtSlot()
+            def run(self) -> None:
+                result_box["result"] = _show_dialog()
+
+        runner = _DialogRunner()
+        runner.moveToThread(app.thread())
+        QtCore.QMetaObject.invokeMethod(
+            runner,
+            "run",
+            QtCore.Qt.ConnectionType.BlockingQueuedConnection,
+        )
+        result = result_box["result"] or QtWidgets.QMessageBox.StandardButton.No
+    else:
+        result = _show_dialog()
+    if result == QtWidgets.QMessageBox.StandardButton.Yes:
+        _logger.info("User chose to stop multiple llama-server processes")
+        stop_server()
+        remaining = _get_llama_server_pids()
+        if remaining:
+            _logger.error(
+                "llama-server processes still running after stop request (count=%s, pids=%s)",
+                len(remaining),
+                ", ".join(remaining),
+            )
+            return False
+        _logger.info("llama-server processes cleared after stop request")
+        return True
+    _logger.info("User chose not to stop multiple llama-server processes; exiting app")
+    app.quit()
+    return False
 
 
 def register_models_callback(callback: Callable[[list[ModelInfo], Optional[str]], None]) -> None:
@@ -150,9 +265,16 @@ def discover_models_async() -> None:
 def register_model_state_callback(callback: Callable[[str, Optional[str]], None]) -> None:
     _logger.info("Registering model state callback")
     _state_callbacks.append(callback)
+    global _cached_state
     if _cached_state is not None:
         try:
             callback(_cached_state[0], _cached_state[1])
+        except Exception:
+            pass
+    else:
+        _cached_state = ("Loading", _cached_loaded_model)
+        try:
+            callback("Loading", _cached_loaded_model)
         except Exception:
             pass
     start_model_state_watch()
@@ -170,32 +292,100 @@ def start_model_state_watch(interval_seconds: float = 2.0) -> None:
         return
     _state_thread_started = True
     _logger.info("Starting model state watch")
-    ensure_running()
-    thread = threading.Thread(
-        target=_poll_model_state,
-        args=(interval_seconds,),
-        daemon=True,
-    )
-    thread.start()
+    _emit_state("Loading", _cached_loaded_model)
+
+    def _startup() -> None:
+        _initialize_server_and_models()
+        thread = threading.Thread(
+            target=_poll_model_state,
+            args=(interval_seconds,),
+            daemon=True,
+        )
+        thread.start()
+
+    threading.Thread(target=_startup, daemon=True).start()
 
 
 def _discover_and_notify() -> None:
     global _cached_models, _cached_loaded_model, _active_model
-    ensure_running()
-    models = _fetch_models_from_server()
-    loaded = _fetch_loaded_model()
-    _cached_models = models
-    _cached_loaded_model = loaded
+    _initialize_server_and_models()
+    models = _cached_models or []
+    loaded = _cached_loaded_model
     if loaded:
         _active_model = loaded
-    _ensure_default_model_loaded(models)
-    _backfill_model_cache_async(models)
-    generate_models_preset_async(_discover_models())
     for callback in _callbacks:
         try:
             callback(models, loaded)
         except Exception:
             continue
+
+
+def _emit_state(state: str, model_name: Optional[str] = None) -> None:
+    global _cached_state, _cached_loaded_model
+    if model_name is None:
+        model_name = _cached_loaded_model
+    _cached_loaded_model = model_name
+    _cached_state = (state, model_name)
+    for callback in _state_callbacks:
+        try:
+            callback(state, model_name)
+        except Exception:
+            continue
+
+
+def _initialize_server_and_models() -> None:
+    global _cached_models, _cached_loaded_model, _active_model, _init_in_progress, _init_complete
+    with _init_lock:
+        if _init_in_progress:
+            return
+        if _init_complete:
+            return
+        _init_in_progress = True
+
+    try:
+        _emit_state("Loading", _cached_loaded_model)
+        stop_server()
+
+        process = launch_server()
+        if process is None or not _wait_for_health():
+            _emit_state("Fault", None)
+            return
+
+        models = _fetch_models_from_server()
+        _cached_models = models
+        if not models:
+            _emit_state("Fault", None)
+            return
+
+        loaded = _fetch_loaded_model()
+        _cached_loaded_model = loaded
+        if loaded:
+            _active_model = loaded
+
+        settings = _load_settings()
+        default_model = settings.get("default_model")
+        candidate = default_model
+        if default_model and any(sep in default_model for sep in ("/", "\\", ":")):
+            candidate = Path(default_model).stem
+        model_names = {model.name for model in models if model.name}
+
+        if not default_model:
+            _emit_state("Waiting", loaded)
+        elif candidate in model_names or default_model in model_names:
+            model_ref = candidate if candidate in model_names else default_model
+            try:
+                load_model(model_ref)
+            except Exception:
+                _emit_state("Waiting", _fetch_loaded_model())
+        else:
+            _emit_state("Waiting", loaded)
+
+        _backfill_model_cache_async(models)
+        generate_models_preset_async(_discover_models())
+    finally:
+        with _init_lock:
+            _init_in_progress = False
+            _init_complete = True
 
 
 def _poll_model_state(interval_seconds: float) -> None:
@@ -238,16 +428,34 @@ def is_router_mode() -> bool:
 
 def stop_server() -> None:
     if sys.platform == "win32":
-        subprocess.run(
+        pids = _get_llama_server_pids()
+        if pids:
+            _logger.info("Stopping llama-server processes (pids=%s)", ", ".join(pids))
+        else:
+            _logger.info("Stopping llama-server processes (none found)")
+    else:
+        _logger.info("Stopping llama-server processes")
+    if sys.platform == "win32":
+        result = subprocess.run(
             [
                 "powershell",
                 "-Command",
                 "Get-Process llama-server -ErrorAction SilentlyContinue | Stop-Process -Force",
             ],
             check=False,
+            capture_output=True,
+            text=True,
         )
+        if result.stdout:
+            _logger.info("llama-server stop stdout: %s", result.stdout.strip())
+        if result.stderr:
+            _logger.warning("llama-server stop stderr: %s", result.stderr.strip())
     else:
-        subprocess.run(["pkill", "-f", "llama-server"], check=False)
+        result = subprocess.run(["pkill", "-f", "llama-server"], check=False, capture_output=True, text=True)
+        if result.stdout:
+            _logger.info("llama-server stop stdout: %s", result.stdout.strip())
+        if result.stderr:
+            _logger.warning("llama-server stop stderr: %s", result.stderr.strip())
 
 
 def _get_models_response() -> tuple[int, dict]:
@@ -315,7 +523,8 @@ def _get_model_state() -> tuple[str, Optional[str]]:
         with urllib.request.urlopen(url, timeout=1.5) as response:
             status = response.status
             if status == 200:
-                return "Ready", _fetch_loaded_model()
+                loaded = _fetch_loaded_model()
+                return ("Ready" if loaded else "Waiting"), loaded
             if status == 503:
                 return "Loading", _fetch_loaded_model()
     except urllib.error.HTTPError as err:
@@ -323,13 +532,13 @@ def _get_model_state() -> tuple[str, Optional[str]]:
             return "Loading", _fetch_loaded_model()
     except Exception:
         pass
-    return "None", None
+    return "Fault", None
 
 
 def _get_active_model_status() -> str:
     status, data = _get_models_response()
     if status != 200:
-        return "Unknown"
+        return "Fault"
     target = (_active_model or "").lower()
     for item in data.get("data", []):
         model_id = (item.get("id") or "").lower()
@@ -342,8 +551,10 @@ def _get_active_model_status() -> str:
         if value in ("loading", "initializing"):
             return "Loading"
         if value:
-            return value.capitalize()
-    return "Unknown"
+            return "Fault"
+    if not data.get("data"):
+        return "Waiting"
+    return "Waiting"
 
 
 def get_current_model_settings() -> dict:
@@ -382,8 +593,8 @@ def get_current_model_settings() -> dict:
 def load_model(model_name: str) -> None:
     """Load a model via router API (POST /models/load). Raises on failure."""
     global _active_model
-    ensure_running()
     _active_model = model_name
+    _emit_state("Loading", model_name)
     url = f"http://{LLAMA_SERVER_HOST}:{LLAMA_SERVER_PORT}/models/load"
     payload = json.dumps({"model": model_name}).encode("utf-8")
     request = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
@@ -399,7 +610,7 @@ def load_model(model_name: str) -> None:
                     raise RuntimeError(f"Model load failed: {data}")
             get_current_model_settings()
             _update_default_model(model_name)
-            _refresh_model_state(_get_active_model_status())
+            _refresh_model_state("Ready")
             return
         except urllib.error.HTTPError as err:
             body = err.read().decode("utf-8")
@@ -413,16 +624,20 @@ def load_model(model_name: str) -> None:
                 _logger.info("Model already loaded: %s", model_name)
                 get_current_model_settings()
                 _update_default_model(model_name)
-                _refresh_model_state(_get_active_model_status())
+                _refresh_model_state("Ready")
                 return
             if err.code == 500 and "mmproj" in lower_message and attempt == 0:
                 _logger.info("mmproj missing; restarting router and retrying load")
                 _restart_router_with_preset()
                 continue
             _logger.exception("Model load request failed: HTTP %s %s", err.code, body)
+            _active_model = None
+            _refresh_model_state("Waiting")
             raise
         except Exception as exc:
             _logger.exception("Model load request failed: %s", exc)
+            _active_model = None
+            _refresh_model_state("Waiting")
             raise
 
 
@@ -650,19 +865,6 @@ def _find_mmproj_path(folder: Path, model_name: str) -> Optional[Path]:
     return candidates[0]
 
 
-def _fetch_chat_template(model_name: Optional[str]) -> Optional[str]:
-    if not model_name:
-        return None
-    query = urllib.parse.quote(model_name)
-    url = f"http://{LLAMA_SERVER_HOST}:{LLAMA_SERVER_PORT}/props?model={query}"
-    try:
-        with urllib.request.urlopen(url, timeout=5) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        return data.get("chat_template")
-    except Exception:
-        return None
-
-
 def _fetch_props(model_name: Optional[str]) -> dict:
     if not model_name:
         return {}
@@ -673,417 +875,3 @@ def _fetch_props(model_name: Optional[str]) -> dict:
             return json.loads(response.read().decode("utf-8"))
     except Exception:
         return {}
-
-
-class LlamaCppChatServer:
-    def __init__(self, host: str = LLAMA_SERVER_HOST, port: int = LLAMA_SERVER_PORT) -> None:
-        self._logger = get_logger(self)
-        self._host = host
-        self._port = port
-        self._messages: list[dict] = []
-        self._stream_callbacks: list[Callable[[str], None]] = []
-        self._tool_call_callbacks: list[Callable[[ToolCall], None]] = []
-        self._tool_result_callbacks: list[Callable[[ToolCall, object], None]] = []
-        self._followup_callbacks: list[Callable[[], None]] = []
-        self._lock = threading.Lock()
-        self._stream_log_buffer = ""
-        self._adapter = select_adapter(self._get_chat_template())
-        self._tool_registry = ToolRegistry()
-        self._tool_schemas: list[dict] = []
-        self._tool_system_added = False
-        self._mcp_manager: MCPClientManager | None = None
-        self._tool_executor: ToolExecutor | None = None
-        self._load_fashion_mcp_tools()
-        self._logger.info("MCP tools loaded: %d", len(self._tool_schemas))
-
-    @property
-    def messages(self) -> list[dict]:
-        return list(self._messages)
-
-    def register_stream_callback(self, callback: Callable[[str], None]) -> None:
-        self._stream_callbacks.append(callback)
-
-    def register_tool_call_callback(self, callback: Callable[[ToolCall], None]) -> None:
-        self._tool_call_callbacks.append(callback)
-
-    def register_tool_result_callback(self, callback: Callable[[ToolCall, object], None]) -> None:
-        self._tool_result_callbacks.append(callback)
-
-    def register_followup_callback(self, callback: Callable[[], None]) -> None:
-        self._followup_callbacks.append(callback)
-
-    def clear_messages(self) -> None:
-        with self._lock:
-            self._messages.clear()
-
-    def send_message(self, text: str, image_paths: Optional[list[Path]] = None) -> None:
-        ensure_running()
-        self._logger.info("User: %s", text)
-        self._stream_log_buffer = ""
-        self._adapter = select_adapter(self._get_chat_template())
-        if image_paths:
-            for path in image_paths:
-                self._logger.info("User attachment: %s", path)
-        self._ensure_tool_system_message()
-        if self._tool_schemas:
-            self._logger.info("Tool schemas attached: %d", len(self._tool_schemas))
-        content = self._build_content(text, image_paths or [])
-        user_message = {"role": "user", "content": content}
-        assistant_message = {"role": "assistant", "content": ""}
-
-        with self._lock:
-            self._messages.append(user_message)
-            self._messages.append(assistant_message)
-
-        thread = threading.Thread(
-            target=self._stream_completion,
-            args=(assistant_message,),
-            daemon=True,
-        )
-        self._logger.info("Starting chat completion thread")
-        thread.start()
-
-    def _stream_completion(self, assistant_message: dict) -> None:
-        url = f"http://{self._host}:{self._port}/v1/chat/completions"
-        model_name = _fetch_loaded_model() or "default"
-        self._logger.info("Chat completion request: model=%s", model_name)
-        tool_call_buffer: dict[int, dict[str, str]] = {}
-        payload = {
-            "model": model_name,
-            "messages": self.messages,
-            "stream": True,
-        }
-        if self._tool_schemas:
-            payload["tools"] = self._tool_schemas
-        data = json.dumps(payload).encode("utf-8")
-        for attempt in range(2):
-            request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-            start_time = time.monotonic()
-            try:
-                with urllib.request.urlopen(request, timeout=60) as response:
-                    content_type = response.headers.get("Content-Type", "")
-                    if "text/event-stream" not in content_type:
-                        body = response.read().decode("utf-8")
-                        self._logger.info(
-                            "Chat response non-streaming (Content-Type=%s, bytes=%d)",
-                            content_type,
-                            len(body),
-                        )
-                        try:
-                            payload = json.loads(body) if body else {}
-                        except json.JSONDecodeError:
-                            self._logger.warning("Chat response non-streaming JSON parse failed")
-                            payload = {}
-                        message_text = self._extract_message_content(payload)
-                        tool_calls = self._extract_tool_calls(payload)
-                        if tool_calls:
-                            self._logger.info("Chat response tool calls: %d", len(tool_calls))
-                            self._handle_tool_calls(tool_calls)
-                        if message_text:
-                            with self._lock:
-                                assistant_message["content"] += message_text
-                            self._log_stream_delta(message_text)
-                            self._emit_stream_chunk(message_text)
-                        else:
-                            snippet = body[:500] if body else ""
-                            self._logger.warning(
-                                "Chat response non-streaming contained no message content: %s",
-                                snippet,
-                            )
-                        self._flush_stream_log()
-                        return
-                    for raw_line in response:
-                        line = raw_line.decode("utf-8").strip()
-                        if not line or not line.startswith("data:"):
-                            continue
-                        chunk = line[5:].strip()
-                        if chunk == "[DONE]":
-                            break
-                        try:
-                            payload = json.loads(chunk)
-                        except json.JSONDecodeError:
-                            continue
-                        self._accumulate_tool_calls(payload, tool_call_buffer)
-                        delta = self._extract_delta(payload)
-                        if not delta:
-                            continue
-                        with self._lock:
-                            assistant_message["content"] += delta
-                        self._log_stream_delta(delta)
-                        self._emit_stream_chunk(delta)
-                self._flush_stream_log()
-                tool_calls = self._finalize_tool_calls(tool_call_buffer)
-                if tool_calls:
-                    self._logger.info("Chat response tool calls: %d", len(tool_calls))
-                    self._handle_tool_calls(tool_calls)
-                else:
-                    self._detect_tool_calls(assistant_message.get("content", ""))
-                return
-            except urllib.error.HTTPError as err:
-                body = err.read().decode("utf-8")
-                if err.code == 500 and "mmproj" in body.lower() and attempt == 0:
-                    self._logger.info("Chat stream missing mmproj; restarting router and retrying")
-                    _restart_router_with_preset()
-                    try:
-                        load_model(model_name)
-                    except Exception:
-                        pass
-                    continue
-                self._logger.error("Chat stream failed: HTTP %s %s", err.code, body)
-                self._flush_stream_log()
-                return
-            except Exception as exc:
-                elapsed = time.monotonic() - start_time
-                self._logger.error("Chat stream failed after %.1fs: %s", elapsed, exc)
-                self._flush_stream_log()
-                return
-
-    def _emit_stream_chunk(self, chunk: str) -> None:
-        for callback in self._stream_callbacks:
-            try:
-                callback(chunk)
-            except Exception:
-                continue
-
-    def _log_stream_delta(self, delta: str) -> None:
-        if not delta:
-            return
-        self._stream_log_buffer += delta
-        while True:
-            newline_index = self._stream_log_buffer.find("\n")
-            if newline_index != -1:
-                line = self._stream_log_buffer[:newline_index]
-                self._stream_log_buffer = self._stream_log_buffer[newline_index + 1 :]
-                if line:
-                    self._logger.info("Assistant: %s", line)
-                continue
-            if len(self._stream_log_buffer) >= 80:
-                chunk = self._stream_log_buffer[:80]
-                self._stream_log_buffer = self._stream_log_buffer[80:]
-                self._logger.info("Assistant: %s", chunk)
-                continue
-            break
-
-    def _flush_stream_log(self) -> None:
-        if self._stream_log_buffer:
-            self._logger.info("Assistant: %s", self._stream_log_buffer)
-            self._stream_log_buffer = ""
-
-    def _detect_tool_calls(self, text: str) -> None:
-        if not text:
-            return
-        try:
-            calls = self._adapter.parse_tool_calls(text)
-        except Exception:
-            return
-        if not calls:
-            return
-        for call in calls:
-            self._logger.info("Tool call detected: %s", call.name)
-            for callback in self._tool_call_callbacks:
-                try:
-                    callback(call)
-                except Exception:
-                    continue
-        self._handle_tool_calls(calls)
-
-    def _handle_tool_calls(self, calls: list[ToolCall]) -> None:
-        executor = self._tool_executor
-        if executor is None:
-            return
-        for call in calls:
-            for callback in self._tool_call_callbacks:
-                try:
-                    callback(call)
-                except Exception:
-                    continue
-            try:
-                result = executor.execute(call)
-            except Exception as exc:
-                result = {"error": str(exc)}
-            for callback in self._tool_result_callbacks:
-                try:
-                    callback(call, result)
-                except Exception:
-                    continue
-            with self._lock:
-                self._messages.append({"role": "tool", "content": json.dumps(result)})
-        followup_message = {"role": "assistant", "content": ""}
-        with self._lock:
-            self._messages.append(followup_message)
-        for callback in self._followup_callbacks:
-            try:
-                callback()
-            except Exception:
-                continue
-        self._stream_completion(followup_message)
-
-    def _load_fashion_mcp_tools(self) -> None:
-        stdio_path = Path(__file__).parent / "test_mcp" / "fashion_stdio.py"
-        server_url = "http://127.0.0.1:6820/mcp"
-        if not stdio_path.exists():
-            return
-        config = {
-            "mcpServers": {
-                "fashion_stdio": {
-                    "transport": "stdio",
-                    "command": sys.executable,
-                    "args": [str(stdio_path)],
-                },
-                "fashion_http": {
-                    "transport": "http",
-                    "url": server_url,
-                },
-            }
-        }
-        try:
-            manager = MCPClientManager(config)
-            tools = manager.list_tools()
-        except Exception as exc:
-            self._logger.warning("Failed to load MCP tools: %s", exc)
-            return
-        registry = ToolRegistry()
-        schemas: list[dict] = []
-        for tool in tools:
-            name = getattr(tool, "name", None) or tool.get("name")
-            description = getattr(tool, "description", None) or tool.get("description") or ""
-            input_schema = (
-                getattr(tool, "inputSchema", None)
-                or tool.get("inputSchema")
-                or tool.get("parameters")
-                or {"type": "object", "properties": {}}
-            )
-            if not name:
-                continue
-            schema = {
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": description,
-                    "parameters": input_schema,
-                },
-            }
-            registry.register(ToolDefinition(name=name, schema=schema, source="mcp"))
-            schemas.append(schema)
-        self._mcp_manager = manager
-        self._tool_registry = registry
-        self._tool_schemas = schemas
-        self._tool_executor = ToolExecutor(registry, manager)
-        self._logger.info("Loaded MCP tools from stdio+http")
-
-    def _ensure_tool_system_message(self) -> None:
-        if self._tool_system_added or not self._tool_schemas:
-            return
-        rendered = self._adapter.render_tools(self._tool_schemas, None)
-        if not rendered:
-            return
-        system_message = {"role": "system", "content": rendered}
-        with self._lock:
-            self._messages.insert(0, system_message)
-        self._tool_system_added = True
-
-    def _get_chat_template(self) -> str | None:
-        model_name = _fetch_loaded_model()
-        settings = _load_settings()
-        cache = settings.get("model_cache", {})
-        entry = cache.get(model_name or "") if model_name else None
-        if isinstance(entry, dict):
-            return entry.get("chat_template")
-        return None
-
-    def _extract_delta(self, payload: dict) -> str:
-        choices = payload.get("choices")
-        if not choices:
-            return ""
-        choice = choices[0]
-        delta = choice.get("delta") or {}
-        content = delta.get("content")
-        if content:
-            return content
-        message = choice.get("message") or {}
-        return message.get("content") or ""
-
-    def _extract_message_content(self, payload: dict) -> str:
-        choices = payload.get("choices")
-        if not choices:
-            return ""
-        choice = choices[0]
-        message = choice.get("message") or {}
-        content = message.get("content")
-        if content:
-            return content
-        return self._extract_delta(payload)
-
-    def _extract_tool_calls(self, payload: dict) -> list[ToolCall]:
-        choices = payload.get("choices") or []
-        if not choices:
-            return []
-        message = (choices[0].get("message") or {})
-        return self._parse_tool_calls_list(message.get("tool_calls") or [])
-
-    def _accumulate_tool_calls(self, payload: dict, buffer: dict[int, dict[str, str]]) -> None:
-        choices = payload.get("choices") or []
-        if not choices:
-            return
-        delta = choices[0].get("delta") or {}
-        tool_calls = delta.get("tool_calls") or []
-        for item in tool_calls:
-            index = item.get("index", 0)
-            function = item.get("function") or {}
-            name = function.get("name")
-            arguments = function.get("arguments") or ""
-            entry = buffer.setdefault(index, {"name": "", "arguments": ""})
-            if name:
-                entry["name"] = name
-            if arguments:
-                entry["arguments"] += arguments
-
-    def _finalize_tool_calls(self, buffer: dict[int, dict[str, str]]) -> list[ToolCall]:
-        calls: list[ToolCall] = []
-        for entry in buffer.values():
-            name = entry.get("name") or ""
-            raw_args = entry.get("arguments") or "{}"
-            try:
-                args = json.loads(raw_args)
-            except json.JSONDecodeError:
-                args = {}
-            if name:
-                calls.append(ToolCall(name=name, arguments=args, raw=raw_args))
-        return calls
-
-    def _parse_tool_calls_list(self, tool_calls: list[dict]) -> list[ToolCall]:
-        calls: list[ToolCall] = []
-        for item in tool_calls:
-            function = item.get("function") or {}
-            name = function.get("name") or ""
-            raw_args = function.get("arguments") or "{}"
-            try:
-                args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-            except json.JSONDecodeError:
-                args = {}
-            if name:
-                calls.append(ToolCall(name=name, arguments=args, raw=str(raw_args)))
-        return calls
-
-    def _build_content(self, text: str, image_paths: list[Path]) -> object:
-        if not image_paths:
-            return text
-
-        parts: list[dict] = [{"type": "text", "text": text}]
-        for path in image_paths:
-            url = self._image_to_data_url(path)
-            if not url:
-                continue
-            parts.append({"type": "image_url", "image_url": {"url": url}})
-        return parts
-
-    def _image_to_data_url(self, path: Path) -> Optional[str]:
-        try:
-            data = path.read_bytes()
-        except Exception:
-            return None
-        mime_type, _ = mimetypes.guess_type(str(path))
-        if not mime_type:
-            mime_type = "image/png"
-        encoded = base64.b64encode(data).decode("utf-8")
-        return f"data:{mime_type};base64,{encoded}"

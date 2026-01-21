@@ -260,21 +260,33 @@ class ChatColumnWidget(QtWidgets.QWidget):
         )
 
     def _register_model_state(self) -> None:
-        module_path = Path(__file__).parent / "llamacpp-server.py"
-        spec = importlib.util.spec_from_file_location("llamacpp_server", module_path)
+        module_path = Path(__file__).parent / "manager_models.py"
+        spec = importlib.util.spec_from_file_location("manager_models", module_path)
         if spec is None or spec.loader is None:
             self._logger.error("Failed to load llamacpp-server module")
             return
         import sys
-        module = sys.modules.get(spec.name)
-        if module is None:
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[spec.name] = module
-            spec.loader.exec_module(module)
+        model_module = sys.modules.get(spec.name)
+        if model_module is None:
+            model_module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = model_module
+            spec.loader.exec_module(model_module)
 
-        self._llama_module = module
+        self._llama_module = model_module
+
+        chat_module_path = Path(__file__).parent / "manager_chats.py"
+        chat_spec = importlib.util.spec_from_file_location("manager_chats", chat_module_path)
+        if chat_spec is None or chat_spec.loader is None:
+            self._logger.error("Failed to load chat manager module")
+            return
+        chat_module = sys.modules.get(chat_spec.name)
+        if chat_module is None:
+            chat_module = importlib.util.module_from_spec(chat_spec)
+            sys.modules[chat_spec.name] = chat_module
+            chat_spec.loader.exec_module(chat_module)
+
         try:
-            self._chat_server = module.LlamaCppChatServer()
+            self._chat_server = chat_module.LlamaChatManager()
             self._chat_server.register_stream_callback(self._on_stream_chunk)
             self._chat_server.register_tool_call_callback(self._on_tool_call_callback)
             self._chat_server.register_tool_result_callback(self._on_tool_result_callback)
@@ -282,8 +294,7 @@ class ChatColumnWidget(QtWidgets.QWidget):
         except Exception as exc:
             self._logger.exception("Failed to initialize chat server: %s", exc)
             self._chat_server = None
-
-        module.register_model_state_callback(self._on_model_state)
+        model_module.register_model_state_callback(self._on_model_state)
 
     def _on_model_state(self, state: str, _model_name: str | None) -> None:
         self.model_state_updated.emit(state)
