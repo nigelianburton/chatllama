@@ -1,3 +1,0 @@
-# Test Gemma with fashion-related question that should trigger tools
-Can you suggest some cool fashion looks for me?
-EXIT

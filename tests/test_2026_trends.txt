@@ -1,3 +1,0 @@
-# Test Gemma with 2026 fashion trends query
-What do you think will be hot in 2026?
-EXIT

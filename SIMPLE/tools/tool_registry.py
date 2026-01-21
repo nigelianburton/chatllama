@@ -9,6 +9,7 @@ class ToolDefinition:
     name: str
     schema: dict[str, Any]
     source: str
+    enabled: bool = True
 
 
 class ToolRegistry:
@@ -19,7 +20,7 @@ class ToolRegistry:
         self._tools[tool.name] = tool
 
     def list_tools(self) -> list[dict[str, Any]]:
-        return [tool.schema for tool in self._tools.values()]
+        return [tool.schema for tool in self._tools.values() if tool.enabled]
 
     def get(self, name: str) -> ToolDefinition | None:
         return self._tools.get(name)

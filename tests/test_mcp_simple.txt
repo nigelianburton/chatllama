@@ -1,3 +1,0 @@
-# Simple test for MCP tool integration
-Hello, how are you?
-EXIT

@@ -26,9 +26,11 @@ from constants import (
     DEFAULT_MODEL_FILE,
     DEFAULT_MMPROJ_FILE,
     GGUF_MODELS_DIR,
+    LLAMA_CPP_MODEL_INIT_FILE,
     LLAMA_SERVER_EXE,
     LLAMA_SERVER_HOST,
     LLAMA_SERVER_PORT,
+    PEPPER_SETTINGS_FILE,
     SETTINGS_DEV,
     SETTINGS_HOME,
     SETTINGS_WORK,
@@ -748,9 +750,9 @@ def _load_settings() -> dict:
         return _settings_data
 
     candidates = [
-        Path(SETTINGS_DEV) / "simple_llama_settings.json",
-        Path(SETTINGS_WORK) / "simple_llama_settings.json",
-        Path(SETTINGS_HOME) / "simple_llama_settings.json",
+        Path(SETTINGS_DEV) / PEPPER_SETTINGS_FILE,
+        Path(SETTINGS_WORK) / PEPPER_SETTINGS_FILE,
+        Path(SETTINGS_HOME) / PEPPER_SETTINGS_FILE,
     ]
     for path in candidates:
         if path.exists():
@@ -804,7 +806,7 @@ def _get_models_preset_path() -> Path:
         return _models_preset_path
     settings = _load_settings()
     settings_folder = Path(settings.get("settings_folder", SETTINGS_DEV))
-    _models_preset_path = settings_folder / "models_preset.ini"
+    _models_preset_path = settings_folder / LLAMA_CPP_MODEL_INIT_FILE
     return _models_preset_path
 
 

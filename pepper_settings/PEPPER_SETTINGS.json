@@ -1,5 +1,5 @@
 {
-  "settings_folder": "D:\\_GITN\\chatllama\\llama_simple",
+  "settings_folder": "D:\\_GITN\\chatllama\\pepper_settings",
   "default_model": "Qwen3-VL-8B-Instruct-abliterated-v2.0.Q4_K_S",
   "model_cache": {
     "Devstral-Small-2-24B-Instruct-2512-Q3_K_L": {
@@ -75,6 +75,35 @@
       "modalities": {
         "vision": false,
         "audio": false
+      }
+    }
+  },
+  "mcp_settings": {
+    "folder": "d:\\_GITN\\chatllama\\SIMPLE\\test_mcp",
+    "servers": {
+      "fashion_stdio": {
+        "enabled": true,
+        "transport": "stdio",
+        "url": "http://127.0.0.1",
+        "port": "6820",
+        "methods": {
+          "get_fashion_look": true,
+          "get_all_looks": true,
+          "get_look_by_vibe": true
+        },
+        "discovered": true
+      },
+      "fashion_http": {
+        "enabled": true,
+        "transport": "http",
+        "url": "http://127.0.0.1",
+        "port": "6820",
+        "discovered": true,
+        "methods": {
+          "get_fashion_look": true,
+          "get_all_looks": true,
+          "get_look_by_vibe": true
+        }
       }
     }
   }

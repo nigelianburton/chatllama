@@ -1,4 +1,0 @@
-# Test with styled message boxes
-hello there
-how are you?
-EXIT

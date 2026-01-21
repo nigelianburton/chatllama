@@ -4,9 +4,9 @@ ChatLlama is a Python + Qt chat front end for local LLMs, built to use the light
 The differentiator is the cards concept and MCP integration: cards are writable objects where the LLM can render outputs (first card is SVG, with more cards planned). ChatLlama includes a built-in MCP server so internal tools (like the SVG card) can be advertised to the model, while also supporting external MCP tools and serving as an HTTP stateful MCP server for other clients to call. The target audience for now is the author, with the immediate goal of stabilizing this workflow over the next 24 hours.
 
 Paths and defaults
-- Default settings folder (dev): D:\_GITN\chatllama\llama_simple
-- Work settings folder: C:\llama_simple
-- Home settings folder: T:\llama_simple
+- Default settings folder (dev): D:\_GITN\chatllama\pepper_settings
+- Work settings folder: C:\pepper_settings
+- Home settings folder: T:\pepper_settings
 - Logs are written to settings_folder\logs
 - llama-server binary: C:\Llama\llama-server.exe
 - llama-server port: 8014
@@ -14,6 +14,9 @@ Paths and defaults
 - Default model folder: D:\LLM Models\mradermacher\Qwen3-VL-8B-Instruct-abliterated-v2.0-GGUF
 - Default model file: D:\LLM Models\mradermacher\Qwen3-VL-8B-Instruct-abliterated-v2.0-GGUF\Qwen3-VL-8B-Instruct-abliterated-v2.0.Q4_K_S.gguf
 - Default mmproj: D:\LLM Models\mradermacher\Qwen3-VL-8B-Instruct-abliterated-v2.0-GGUF\Qwen3-VL-8B-Instruct-abliterated-v2.0.mmproj-f16.gguf
+
+Development preference
+- Avoid fallbacks that mask errors during development. If a dependency fails (e.g., llama-server), surface the failure rather than silently degrading.
 
 SIMPLE key files overview
 - SIMPLE/chat_llama.py: main Qt window, splitters, toolbars, wiring

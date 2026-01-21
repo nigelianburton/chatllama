@@ -294,17 +294,17 @@ def main() -> None:
     parser.add_argument(
         "--home",
         action="store_true",
-        help="Use home settings folder (T:\\llama_simple).",
+        help=f"Use home settings folder ({SETTINGS_HOME}).",
     )
     parser.add_argument(
         "--work",
         action="store_true",
-        help="Use work settings folder (C:\\llama_simple).",
+        help=f"Use work settings folder ({SETTINGS_WORK}).",
     )
     parser.add_argument(
         "--dev",
         action="store_true",
-        help="Use dev settings folder (D:\\_GITN\\chatllama\\llama_simple).",
+        help=f"Use dev settings folder ({SETTINGS_DEV}).",
     )
     args = parser.parse_args()
 

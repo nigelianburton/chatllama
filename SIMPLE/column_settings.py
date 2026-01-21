@@ -19,6 +19,7 @@ from constants import (
     DEFAULT_MODEL_FILE,
     MCP_LABEL_WIDTH,
     MCP_PORT_INPUT_WIDTH,
+    PEPPER_SETTINGS_FILE,
     TOGGLE_DISABLED_COLOR,
     TOGGLE_OFF_COLOR,
     TOGGLE_ON_COLOR,
@@ -101,7 +102,7 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
 
     def _ensure_settings_file(self) -> None:
         self._settings_folder.mkdir(parents=True, exist_ok=True)
-        settings_path = self._settings_folder / "simple_llama_settings.json"
+        settings_path = self._settings_folder / PEPPER_SETTINGS_FILE
         if not settings_path.exists():
             settings_path.write_text(
                 json.dumps(
@@ -124,7 +125,7 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
             settings_path.write_text(json.dumps(data, indent=2))
 
     def _load_settings_cache(self) -> None:
-        settings_path = self._settings_folder / "simple_llama_settings.json"
+        settings_path = self._settings_folder / PEPPER_SETTINGS_FILE
         if not settings_path.exists():
             return
         try:
@@ -137,7 +138,7 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
             self._mcp_folder = Path(folder)
 
     def _save_mcp_settings(self, mcp_data: dict) -> None:
-        settings_path = self._settings_folder / "simple_llama_settings.json"
+        settings_path = self._settings_folder / PEPPER_SETTINGS_FILE
         try:
             data = json.loads(settings_path.read_text()) if settings_path.exists() else {}
         except Exception:
@@ -194,7 +195,7 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         if not mcp_folder.exists():
             return
 
-        settings_path = self._settings_folder / "simple_llama_settings.json"
+        settings_path = self._settings_folder / PEPPER_SETTINGS_FILE
         try:
             data = json.loads(settings_path.read_text()) if settings_path.exists() else {}
         except Exception:
@@ -404,7 +405,7 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
                 path.unlink()
         except Exception as exc:
             self._logger.warning("Failed to delete MCP file: %s", exc)
-        settings_path = self._settings_folder / "simple_llama_settings.json"
+        settings_path = self._settings_folder / PEPPER_SETTINGS_FILE
         try:
             data = json.loads(settings_path.read_text()) if settings_path.exists() else {}
         except Exception:
@@ -419,7 +420,7 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         self._refresh_mcp_list()
 
     def _get_mcp_state(self, name: str) -> dict:
-        settings_path = self._settings_folder / "simple_llama_settings.json"
+        settings_path = self._settings_folder / PEPPER_SETTINGS_FILE
         try:
             data = json.loads(settings_path.read_text()) if settings_path.exists() else {}
         except Exception:
@@ -429,7 +430,7 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         return servers.setdefault(name, {})
 
     def _store_mcp_state(self, name: str, state: dict) -> None:
-        settings_path = self._settings_folder / "simple_llama_settings.json"
+        settings_path = self._settings_folder / PEPPER_SETTINGS_FILE
         try:
             data = json.loads(settings_path.read_text()) if settings_path.exists() else {}
         except Exception:

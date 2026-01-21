@@ -1,4 +1,0 @@
-# Test fashion question to trigger tool use - with delay before exit
-what are some fashion looks i can try?
-tell me more about sustainable fashion
-EXIT

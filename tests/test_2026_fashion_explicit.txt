@@ -1,3 +1,0 @@
-# Test Gemma with explicit fashion query for 2026
-What fashion trends do you think will be hot in 2026?
-EXIT

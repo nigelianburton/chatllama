@@ -22,7 +22,7 @@ Purpose: define how we advertise tools, detect tool requests, execute tools (inc
 - Client controls server lifecycle for stdio (environment isolation is explicit).
 - Prefer explicit config for multiple servers with namespacing.
 
-## Model template analysis (from llama_simple/simple_llama_settings.json)
+## Model template analysis (from pepper_settings/PEPPER_SETTINGS.json)
 
 ### Devstral-Small-2-24B-Instruct-2512-Q3_K_L
 - Cache lacks `chat_template` (currently only generation params). This means we cannot rely on template-defined tool syntax.

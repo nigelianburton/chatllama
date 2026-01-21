@@ -4,13 +4,13 @@
 
 | Plan component | Current implementation | Notes |
 | --- | --- | --- |
-| ToolRegistry | SIMPLE/tools/tool_registry.py (`ToolRegistry`, `ToolDefinition`) | Registry populated from fashion_stdio (stdio) on startup. |
+| ToolRegistry | SIMPLE/tools/tool_registry.py (`ToolRegistry`, `ToolDefinition`) | Registry populated from settings-driven MCP servers; tools now prefixed by server name to avoid collisions. |
 | ToolProtocolAdapter | SIMPLE/tools/tool_protocol_base.py + adapters | Implemented adapters: default, qwen, huihui, gemma. |
 | ResponseParser | Adapter `parse_tool_calls()` + LlamaCppChatServer `_detect_tool_calls()` | Parses tool calls and triggers execution. |
-| ToolExecutor | SIMPLE/tools/tool_executor.py (`ToolExecutor`) | Executes MCP tool calls via stdio for fashion_stdio. |
-| MCPClientManager | SIMPLE/tools/mcp_client_manager.py (`MCPClientManager`) | Stdio client for fashion_stdio test server. |
+| ToolExecutor | SIMPLE/tools/tool_executor.py (`ToolExecutor`) | Executes MCP tool calls via per-server managers; supports namespaced tools. |
+| MCPClientManager | SIMPLE/tools/mcp_client_manager.py (`MCPClientManager`) | Stdio + HTTP support, timeout on list_tools, JSON-serializable result normalization. |
 | ContextManager | Not implemented | Needed for tool-result summarization + context budget. |
-| llamacpp-server.py transport | LlamaCppChatServer | Loads fashion_stdio tools, injects tool schema, executes tool calls, streams follow-up reply. |
+| llamacpp-server.py transport | LlamaCppChatServer | Loads MCP tools from settings (stdio + HTTP), injects tool schema, executes tool calls, streams follow-up reply. |
 
 ## MCP lifecycle protocol (LLM ↔ ChatLlama ↔ MCP / Display driver)
 
@@ -26,15 +26,16 @@
 
 ### Built
 - Tool protocol adapters for Qwen, Huihui, Gemma, and default parsing.
-- Tool registry and executor wired to fashion_stdio (stdio) via MCPClientManager.
-- LlamaCppChatServer detects tool calls, executes fashion_stdio tools, and streams follow-up replies.
+- Settings-driven MCP discovery (enabled flags, transport, URL/port, methods) with UI toggles.
+- LlamaCppChatServer loads MCP tools from settings, injects tool schema, executes tool calls, and streams follow-up replies.
+- MCP tool names are namespaced by server to avoid collisions; executor routes to per-server managers.
+- Stdio + HTTP MCP support with timeouts and JSON-serializable tool results.
 - Chat history shows MCP request/response bubbles tied to tool calls.
 - Cached chat templates in settings to select adapters.
-- MCP stdio + HTTP servers active simultaneously; 2026 (stdio) and 1960s (HTTP) fashion MCPs both validated.
 
 ### To build next
-- MCPClientManager: HTTP client support + connection pooling.
-- ToolRegistry population: internal SVG card tools + external MCP config.
+- ToolRegistry population: internal SVG card tools + external MCP config expansion beyond test_mcp.
 - ContextManager: summarize tool responses; size limits for 12K models.
 - Multi-call loop guardrails (depth/time caps, retry logic).
 - UI glue: explicit tool state transitions on assistant bubbles and card update confirmations.
+- MCP connection pooling/reuse (optional optimization).
