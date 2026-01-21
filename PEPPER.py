@@ -3,18 +3,21 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from logger import configure_logging, get_logger
-from mcp_internal_server import InternalMcpServer
-from utilities import Utilities
-from cards.svg_card import SVGCard
-from column_chat import ChatColumnWidget
-from column_cards import ColumnCardsWidget
-from column_settings import ColumnSettingsWidget
+from Engine.logger import configure_logging, get_logger
+from Engine.mcp_internal_server import InternalMcpServer
+from Engine.autorun import run_autorun
+from Engine.interaction_logger import init_interaction_logger
+from Engine.utilities import Utilities
+from UI.column_chat import ChatColumnWidget
+from UI.column_cards import ColumnCardsWidget
+from UI.column_settings import ColumnSettingsWidget
+from MCP_Internal.svg_card import SVGCard
 from constants import (
     HEADER_COLOR_FAULT,
     HEADER_COLOR_LOADING,
@@ -262,6 +265,10 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
         if app:
             app.quit()
 
+    def schedule_exit(self, delay_ms: int) -> None:
+        self._logger.info("Scheduling exit in %d ms", delay_ms)
+        QtCore.QTimer.singleShot(delay_ms, self._exit_if_idle)
+
     def _invoke_ui(self, func: Callable[[], object]) -> object:
         self._ui_bridge.last_result = None
         return QtCore.QMetaObject.invokeMethod(
@@ -287,9 +294,9 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
 def main() -> None:
     parser = argparse.ArgumentParser(description="ChatLlama SIMPLE")
     parser.add_argument(
-        "--exitidle",
-        action="store_true",
-        help="Exit after initialization completes (capture screenshot before exit).",
+        "--autorun",
+        nargs="*",
+        help="Run autorun instructions from a text file (optionally followed by image paths).",
     )
     parser.add_argument(
         "--home",
@@ -321,14 +328,62 @@ def main() -> None:
     logger.info("Log file: %s", config.log_file)
     logger.info("Python: %s", sys.executable)
     logger.info("Conda env: %s", os.environ.get("CONDA_PREFIX", "(not set)"))
+    init_interaction_logger(config.log_file)
 
     app = QtWidgets.QApplication(sys.argv)
     window = ChatLlamaWindow(
-        exit_idle=args.exitidle,
+        exit_idle=False,
         log_file=config.log_file,
         settings_folder=settings_folder,
     )
     window.show()
+
+    if args.autorun is not None:
+        def _finish(success: bool, message: str) -> None:
+            if success:
+                logger.info("Autorun completion signaled; scheduling exit")
+                def _schedule() -> None:
+                    window.schedule_exit(1000)
+                window._invoke_ui(_schedule)
+            else:
+                logger.error(message)
+                app = QtWidgets.QApplication.instance()
+                if app:
+                    app.quit()
+
+        def _run() -> None:
+            def _stage(text: str, image_paths: list[Path]) -> None:
+                def _do() -> None:
+                    window._chat_container.autorun_stage_message(text, image_paths)
+                window._invoke_ui(_do)
+
+            def _submit() -> None:
+                def _do() -> None:
+                    window._chat_container.autorun_submit_message()
+                window._invoke_ui(_do)
+
+            def _register_availability(callback: Callable[[str], None]) -> bool:
+                def _do() -> bool:
+                    return window._chat_container.register_availability_callback(callback)
+                result = window._invoke_ui(_do)
+                return bool(result)
+
+            def _get_last_response() -> str:
+                def _do() -> str:
+                    return window._chat_container.get_last_assistant_message()
+                result = window._invoke_ui(_do)
+                return str(result or "")
+
+            success, message = run_autorun(
+                args.autorun,
+                ui_stage_message=_stage,
+                ui_submit_message=_submit,
+                register_availability_callback=_register_availability,
+                ui_get_last_response=_get_last_response,
+            )
+            _finish(success, message)
+
+        threading.Thread(target=_run, daemon=True).start()
     sys.exit(app.exec())
 
 

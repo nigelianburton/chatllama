@@ -14,7 +14,7 @@ from pathlib import Path
 
 from PyQt6 import QtCore, QtWidgets
 
-from logger import get_logger
+from Engine.logger import get_logger
 from constants import (
     DEFAULT_MODEL_FILE,
     MCP_LABEL_WIDTH,
@@ -24,9 +24,9 @@ from constants import (
     TOGGLE_OFF_COLOR,
     TOGGLE_ON_COLOR,
 )
-from settings_local_models import SettingsLocalModels
-from settings_local_mcps import SettingsLocalMcps
-from settings_built_in_mcps import SettingsBuiltInMcps, BuiltInMcpEntryWidget
+from UI.settings_local_models import SettingsLocalModels
+from UI.settings_local_mcps import SettingsLocalMcps
+from UI.settings_built_in_mcps import SettingsBuiltInMcps, BuiltInMcpEntryWidget
 
 
 class ColumnSettingsWidget(QtWidgets.QWidget):
@@ -47,7 +47,7 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         self._load_worker: QtCore.QObject | None = None
         self._last_model_state: tuple[str, str] | None = None
         self._last_load_enabled: bool | None = None
-        self._mcp_folder = Path(__file__).parent / "test_mcp"
+        self._mcp_folder = Path(__file__).resolve().parents[1] / "MCP_Local"
         self._mcp_entries: dict[str, dict[str, object]] = {}
         self._mcp_timer = QtCore.QTimer(self)
         self._mcp_timer.setInterval(5000)
@@ -221,13 +221,13 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
             if widget:
                 widget.deleteLater()
 
-        cards_folder = Path(__file__).parent / "cards"
-        if not cards_folder.exists():
+        internal_folder = Path(__file__).resolve().parents[1] / "MCP_Internal"
+        if not internal_folder.exists():
             return
 
         local_ip = self._get_local_ip()
 
-        for entry in sorted(cards_folder.glob("*.py")):
+        for entry in sorted(internal_folder.glob("*.py")):
             if entry.name == "__init__.py":
                 continue
             name = entry.stem
@@ -608,7 +608,7 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
             return False
 
     def _register_model_discovery(self) -> None:
-        module_path = Path(__file__).parent / "manager_models.py"
+        module_path = Path(__file__).parent.parent / "Engine" / "manager_models.py"
         spec = importlib.util.spec_from_file_location("manager_models", module_path)
         if spec is None or spec.loader is None:
             self._logger.error("Failed to load llamacpp-server module")

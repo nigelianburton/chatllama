@@ -1,3 +1,4 @@
+**Environment mandate:** Always run commands inside the `chatllama2` conda environment (`conda activate chatllama2`) before executing Python or scripts.
 
 ChatLlama is a Python + Qt chat front end for local LLMs, built to use the lightweight llama-server nightly located in C:\Llama. The app is a three-column UI (Settings, Chat, Cards) focused on fast local iteration without LM Studio. It supports multimodal prompts with drag-and-drop image attachments, and the chat layer parses tool requests and presents tool calls/results in the conversation.
 
@@ -19,16 +20,16 @@ Development preference
 - Avoid fallbacks that mask errors during development. If a dependency fails (e.g., llama-server), surface the failure rather than silently degrading.
 
 SIMPLE key files overview
-- SIMPLE/chat_llama.py: main Qt window, splitters, toolbars, wiring
-- SIMPLE/column_settings.py: Settings column UI, model discovery callback, settings file creation
-- SIMPLE/column_chat.py: Chat column UI, message widgets, attachments bar, model-ready state
-- SIMPLE/column_cards.py: Cards column container and layout
-- SIMPLE/cards/svg_card.py: SVG card widget with aspect ratio handling
-- SIMPLE/mcp_internal_server.py: FastMCP server for SVG card tools
-- SIMPLE/llamacpp-server.py: llama-server status, model discovery, model state callbacks
-- SIMPLE/logger.py: logging to console and settings_folder\logs
-- SIMPLE/utilities.py: log_screenshot helper
-- SIMPLE/constants.py: paths and default model settings
+- PEPPER.py: main Qt window, splitters, toolbars, wiring
+- UI/column_settings.py: Settings column UI, model discovery callback, settings file creation
+- UI/column_chat.py: Chat column UI, message widgets, attachments bar, model-ready state
+- UI/column_cards.py: Cards column container and layout
+- MCP_Internal/svg_card.py: SVG card widget with aspect ratio handling
+- Engine/mcp_internal_server.py: FastMCP server for SVG card tools
+- Engine/manager_models.py: llama-server status, model discovery, model state callbacks
+- Engine/logger.py: logging to console and settings_folder\logs
+- Engine/utilities.py: log_screenshot helper
+- constants.py: paths and default model settings
 - testers/svg_mcp_tester.py: MCP client test for SVG cards
 
 Known minor issues

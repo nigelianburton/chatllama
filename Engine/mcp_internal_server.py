@@ -4,8 +4,8 @@ import threading
 import uuid
 from typing import Callable, Optional
 
-from logger import get_logger
-from cards.svg_card import SVGCard
+from Engine.logger import get_logger
+from MCP_Internal.svg_card import SVGCard
 
 try:
     from fastmcp.server import FastMCP

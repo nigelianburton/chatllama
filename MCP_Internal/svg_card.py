@@ -4,7 +4,7 @@ from typing import Optional
 
 from PyQt6 import QtCore, QtGui, QtWidgets, QtSvgWidgets
 
-from logger import get_logger
+from Engine.logger import get_logger
 
 
 class SVGCard(QtWidgets.QFrame):

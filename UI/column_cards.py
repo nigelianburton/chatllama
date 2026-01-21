@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from PyQt6 import QtWidgets
 
-from logger import get_logger
+from Engine.logger import get_logger
 
 
 class ColumnCardsWidget(QtWidgets.QWidget):

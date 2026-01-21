@@ -5,7 +5,7 @@ from typing import Optional
 
 from PyQt6 import QtGui, QtWidgets
 
-from logger import get_logger
+from Engine.logger import get_logger
 
 
 class Utilities:

@@ -10,20 +10,21 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
 
-from logger import get_logger
-from manager_models import (
+from Engine.logger import get_logger
+from Engine.manager_models import (
     LLAMA_SERVER_HOST,
     LLAMA_SERVER_PORT,
     _fetch_loaded_model,
     _load_settings,
     _restart_router_with_preset,
+    register_model_state_callback,
     load_model,
 )
-from tools.mcp_client_manager import MCPClientManager
-from tools.tool_executor import ToolExecutor
-from tools.tool_protocol_base import ToolCall
-from tools.tool_protocol_selector import select_adapter
-from tools.tool_registry import ToolDefinition, ToolRegistry
+from Tools.mcp_client_manager import MCPClientManager
+from Tools.tool_executor import ToolExecutor
+from Tools.tool_protocol_base import ToolCall
+from Tools.tool_protocol_selector import select_adapter
+from Tools.tool_registry import ToolDefinition, ToolRegistry
 
 
 class LlamaChatManager:
@@ -33,6 +34,7 @@ class LlamaChatManager:
         self._port = port
         self._messages: list[dict] = []
         self._stream_callbacks: list[Callable[[str], None]] = []
+        self._stream_end_callbacks: list[Callable[[], None]] = []
         self._tool_call_callbacks: list[Callable[[ToolCall], None]] = []
         self._tool_result_callbacks: list[Callable[[ToolCall, object], None]] = []
         self._followup_callbacks: list[Callable[[], None]] = []
@@ -48,13 +50,29 @@ class LlamaChatManager:
         self._mcp_loading = False
         self._mcp_tool_map: dict[str, tuple[MCPClientManager, str]] = {}
         self._load_mcp_tools_from_settings_async()
+        self._availability_callbacks: list[Callable[[str], None]] = []
+        self._availability_state = "BUSY"
+        self._availability_lock = threading.Lock()
+        self._active_request = False
+        self._model_ready = False
+        register_model_state_callback(self._on_model_state)
 
     @property
     def messages(self) -> list[dict]:
         return list(self._messages)
 
+    def register_availability_callback(self, callback: Callable[[str], None]) -> None:
+        self._availability_callbacks.append(callback)
+        try:
+            callback(self._availability_state)
+        except Exception:
+            pass
+
     def register_stream_callback(self, callback: Callable[[str], None]) -> None:
         self._stream_callbacks.append(callback)
+
+    def register_stream_end_callback(self, callback: Callable[[], None]) -> None:
+        self._stream_end_callbacks.append(callback)
 
     def register_tool_call_callback(self, callback: Callable[[ToolCall], None]) -> None:
         self._tool_call_callbacks.append(callback)
@@ -68,6 +86,27 @@ class LlamaChatManager:
     def clear_messages(self) -> None:
         with self._lock:
             self._messages.clear()
+
+    def get_last_assistant_message(self) -> str:
+        with self._lock:
+            for message in reversed(self._messages):
+                if message.get("role") != "assistant":
+                    continue
+                content = message.get("content", "")
+                if isinstance(content, str):
+                    return content
+                if isinstance(content, list):
+                    parts = []
+                    for item in content:
+                        if not isinstance(item, dict):
+                            continue
+                        if item.get("type") == "text":
+                            text = item.get("text")
+                            if text:
+                                parts.append(text)
+                    return "\n".join(parts)
+                return str(content)
+        return ""
 
     def send_message(self, text: str, image_paths: Optional[list[Path]] = None) -> None:
         self._logger.info("User: %s", text)
@@ -89,6 +128,8 @@ class LlamaChatManager:
             self._messages.append(user_message)
             self._messages.append(assistant_message)
 
+        self._active_request = True
+        self._set_availability("BUSY")
         thread = threading.Thread(
             target=self._stream_completion,
             args=(assistant_message,),
@@ -110,87 +151,96 @@ class LlamaChatManager:
         if self._tool_schemas:
             payload["tools"] = self._tool_schemas
         data = json.dumps(payload).encode("utf-8")
-        for attempt in range(2):
-            request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-            start_time = time.monotonic()
-            try:
-                with urllib.request.urlopen(request, timeout=60) as response:
-                    content_type = response.headers.get("Content-Type", "")
-                    if "text/event-stream" not in content_type:
-                        body = response.read().decode("utf-8")
-                        self._logger.info(
-                            "Chat response non-streaming (Content-Type=%s, bytes=%d)",
-                            content_type,
-                            len(body),
-                        )
-                        try:
-                            payload = json.loads(body) if body else {}
-                        except json.JSONDecodeError:
-                            self._logger.warning("Chat response non-streaming JSON parse failed")
-                            payload = {}
-                        message_text = self._extract_message_content(payload)
-                        tool_calls = self._extract_tool_calls(payload)
-                        if tool_calls:
-                            self._logger.info("Chat response tool calls: %d", len(tool_calls))
-                            self._handle_tool_calls(tool_calls)
-                        if message_text:
-                            with self._lock:
-                                assistant_message["content"] += message_text
-                            self._log_stream_delta(message_text)
-                            self._emit_stream_chunk(message_text)
-                        else:
-                            snippet = body[:500] if body else ""
-                            self._logger.warning(
-                                "Chat response non-streaming contained no message content: %s",
-                                snippet,
+        try:
+            for attempt in range(2):
+                request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+                start_time = time.monotonic()
+                try:
+                    with urllib.request.urlopen(request, timeout=60) as response:
+                        content_type = response.headers.get("Content-Type", "")
+                        if "text/event-stream" not in content_type:
+                            body = response.read().decode("utf-8")
+                            self._logger.info(
+                                "Chat response non-streaming (Content-Type=%s, bytes=%d)",
+                                content_type,
+                                len(body),
                             )
-                        self._flush_stream_log()
-                        return
-                    for raw_line in response:
-                        line = raw_line.decode("utf-8").strip()
-                        if not line or not line.startswith("data:"):
-                            continue
-                        chunk = line[5:].strip()
-                        if chunk == "[DONE]":
-                            break
+                            try:
+                                payload = json.loads(body) if body else {}
+                            except json.JSONDecodeError:
+                                self._logger.warning("Chat response non-streaming JSON parse failed")
+                                payload = {}
+                            message_text = self._extract_message_content(payload)
+                            tool_calls = self._extract_tool_calls(payload)
+                            if tool_calls:
+                                self._logger.info("Chat response tool calls: %d", len(tool_calls))
+                                self._handle_tool_calls(tool_calls)
+                            if message_text:
+                                with self._lock:
+                                    assistant_message["content"] += message_text
+                                self._log_stream_delta(message_text)
+                                self._emit_stream_chunk(message_text)
+                            else:
+                                snippet = body[:500] if body else ""
+                                self._logger.warning(
+                                    "Chat response non-streaming contained no message content: %s",
+                                    snippet,
+                                )
+                            self._flush_stream_log()
+                            self._emit_stream_end()
+                            return
+                        for raw_line in response:
+                            line = raw_line.decode("utf-8").strip()
+                            if not line or not line.startswith("data:"):
+                                continue
+                            chunk = line[5:].strip()
+                            if chunk == "[DONE]":
+                                break
+                            try:
+                                payload = json.loads(chunk)
+                            except json.JSONDecodeError:
+                                continue
+                            self._accumulate_tool_calls(payload, tool_call_buffer)
+                            delta = self._extract_delta(payload)
+                            if not delta:
+                                continue
+                            with self._lock:
+                                assistant_message["content"] += delta
+                            self._log_stream_delta(delta)
+                            self._emit_stream_chunk(delta)
+                    self._flush_stream_log()
+                    tool_calls = self._finalize_tool_calls(tool_call_buffer)
+                    if tool_calls:
+                        self._logger.info("Chat response tool calls: %d", len(tool_calls))
+                        self._handle_tool_calls(tool_calls)
+                    else:
+                        self._detect_tool_calls(assistant_message.get("content", ""))
+                    self._emit_stream_end()
+                    return
+                except urllib.error.HTTPError as err:
+                    body = err.read().decode("utf-8")
+                    if err.code == 500 and "mmproj" in body.lower() and attempt == 0:
+                        self._logger.info("Chat stream missing mmproj; restarting router and retrying")
+                        _restart_router_with_preset()
                         try:
-                            payload = json.loads(chunk)
-                        except json.JSONDecodeError:
-                            continue
-                        self._accumulate_tool_calls(payload, tool_call_buffer)
-                        delta = self._extract_delta(payload)
-                        if not delta:
-                            continue
-                        with self._lock:
-                            assistant_message["content"] += delta
-                        self._log_stream_delta(delta)
-                        self._emit_stream_chunk(delta)
-                self._flush_stream_log()
-                tool_calls = self._finalize_tool_calls(tool_call_buffer)
-                if tool_calls:
-                    self._logger.info("Chat response tool calls: %d", len(tool_calls))
-                    self._handle_tool_calls(tool_calls)
-                else:
-                    self._detect_tool_calls(assistant_message.get("content", ""))
-                return
-            except urllib.error.HTTPError as err:
-                body = err.read().decode("utf-8")
-                if err.code == 500 and "mmproj" in body.lower() and attempt == 0:
-                    self._logger.info("Chat stream missing mmproj; restarting router and retrying")
-                    _restart_router_with_preset()
-                    try:
-                        load_model(model_name)
-                    except Exception:
-                        pass
-                    continue
-                self._logger.error("Chat stream failed: HTTP %s %s", err.code, body)
-                self._flush_stream_log()
-                return
-            except Exception as exc:
-                elapsed = time.monotonic() - start_time
-                self._logger.error("Chat stream failed after %.1fs: %s", elapsed, exc)
-                self._flush_stream_log()
-                return
+                            load_model(model_name)
+                        except Exception:
+                            pass
+                        continue
+                    self._logger.error("Chat stream failed: HTTP %s %s", err.code, body)
+                    self._flush_stream_log()
+                    return
+                except Exception as exc:
+                    elapsed = time.monotonic() - start_time
+                    self._logger.error("Chat stream failed after %.1fs: %s", elapsed, exc)
+                    self._flush_stream_log()
+                    return
+        finally:
+            self._active_request = False
+            if self._model_ready:
+                self._set_availability("AVAILABLE")
+            else:
+                self._set_availability("BUSY")
 
     def _emit_stream_chunk(self, chunk: str) -> None:
         for callback in self._stream_callbacks:
@@ -198,6 +248,30 @@ class LlamaChatManager:
                 callback(chunk)
             except Exception:
                 continue
+
+    def _emit_stream_end(self) -> None:
+        for callback in self._stream_end_callbacks:
+            try:
+                callback()
+            except Exception:
+                continue
+
+    def get_tools_advertisement(self) -> tuple[str, list[tuple[str, str]]] | None:
+        if not self._tool_schemas:
+            self._load_mcp_tools_from_settings(timeout=1.5)
+        if not self._tool_schemas:
+            return None
+        details: list[tuple[str, str]] = []
+        for schema in self._tool_schemas:
+            function = schema.get("function") if isinstance(schema, dict) else None
+            if not isinstance(function, dict):
+                continue
+            name = function.get("name") or ""
+            description = function.get("description") or ""
+            if name:
+                details.append((name, description))
+        content = f"Tools Advertisement ({len(details)} tools)"
+        return content, details
 
     def _log_stream_delta(self, delta: str) -> None:
         if not delta:
@@ -289,7 +363,8 @@ class LlamaChatManager:
         schemas: list[dict] = []
         tool_map: dict[str, tuple[MCPClientManager, str]] = {}
 
-        folder = Path(mcp_settings.get("folder") or Path(__file__).parent / "test_mcp")
+        default_mcp_folder = Path(__file__).parent.parent / "MCP_Local"
+        folder = Path(mcp_settings.get("folder") or default_mcp_folder)
         for server_name, state in servers.items():
             if not state.get("enabled", False):
                 continue
@@ -504,3 +579,24 @@ class LlamaChatManager:
             mime_type = "image/png"
         encoded = base64.b64encode(data).decode("utf-8")
         return f"data:{mime_type};base64,{encoded}"
+
+    def _on_model_state(self, state: str, _model_name: str | None) -> None:
+        self._model_ready = state == "Ready"
+        if self._active_request:
+            self._set_availability("BUSY")
+            return
+        if self._model_ready:
+            self._set_availability("AVAILABLE")
+        else:
+            self._set_availability("BUSY")
+
+    def _set_availability(self, state: str) -> None:
+        with self._availability_lock:
+            if state == self._availability_state:
+                return
+            self._availability_state = state
+        for callback in self._availability_callbacks:
+            try:
+                callback(state)
+            except Exception:
+                continue

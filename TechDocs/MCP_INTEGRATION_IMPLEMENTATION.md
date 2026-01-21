@@ -34,7 +34,7 @@
 - Cached chat templates in settings to select adapters.
 
 ### To build next
-- ToolRegistry population: internal SVG card tools + external MCP config expansion beyond test_mcp.
+- ToolRegistry population: internal SVG card tools + external MCP config expansion beyond MCP_Local.
 - ContextManager: summarize tool responses; size limits for 12K models.
 - Multi-call loop guardrails (depth/time caps, retry logic).
 - UI glue: explicit tool state transitions on assistant bubbles and card update confirmations.

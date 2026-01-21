@@ -1,7 +1,7 @@
-# Chat bubble UI (SIMPLE)
+# Chat bubble UI (UI)
 
 ## Overview
-Chat message bubbles are implemented in [SIMPLE/column_chat_messages.py](../column_chat_messages.py). They render a bordered message container, optional attachments, optional details grid, and a top-left type label.
+Chat message bubbles are implemented in [UI/column_chat_messages.py](../UI/column_chat_messages.py). They render a bordered message container, optional attachments, optional details grid, and a top-left type label.
 
 ## Structure
 - **Main rectangle**: no fill, no border; stretches to column width and fits content height.

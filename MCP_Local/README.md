@@ -30,7 +30,7 @@ python lm_studio_server.py
 Set in settings.yml:
 ```yaml
 mcp_server_enabled: true
-mcp_server_command: python test_mcp/lm_studio_server.py
+mcp_server_command: python MCP_Local/lm_studio_server.py
 tool_integration_enabled: true  # Enable to use tools
 ```
 
@@ -56,7 +56,7 @@ HTTP/SSE server that LM Studio can use directly as an MCP provider.
 
 1. Start the server:
 ```bash
-python test_mcp/fashion_http.py
+python MCP_Local/fashion_http.py
 ```
 
 2. Add to `C:\Users\{username}\.lmstudio\mcp-config.json`:

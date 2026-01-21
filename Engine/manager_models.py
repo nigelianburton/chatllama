@@ -16,12 +16,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from logger import get_logger
-from tools.mcp_client_manager import MCPClientManager
-from tools.tool_executor import ToolExecutor
-from tools.tool_protocol_base import ToolCall
-from tools.tool_protocol_selector import select_adapter
-from tools.tool_registry import ToolDefinition, ToolRegistry
+from Engine.logger import get_logger
+from Tools.mcp_client_manager import MCPClientManager
+from Tools.tool_executor import ToolExecutor
+from Tools.tool_protocol_base import ToolCall
+from Tools.tool_protocol_selector import select_adapter
+from Tools.tool_registry import ToolDefinition, ToolRegistry
 from constants import (
     DEFAULT_MODEL_FILE,
     DEFAULT_MMPROJ_FILE,

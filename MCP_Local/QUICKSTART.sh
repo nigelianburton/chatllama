@@ -1,5 +1,5 @@
 #!/bin/bash
-# Quick start guide for test_mcp servers
+# Quick start guide for MCP_Local servers
 
 echo "==================================="
 echo "ChatLlama Test MCP Servers"

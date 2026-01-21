@@ -9,13 +9,15 @@ from fastmcp import Client
 
 
 def _load_image_data_uri(image_path: Path) -> str:
-        data = image_path.read_bytes()
-        b64 = base64.b64encode(data).decode("ascii")
-        return f"data:image/jpeg;base64,{b64}"
+    data = image_path.read_bytes()
+    ext = image_path.suffix.lower()
+    mime = "image/jpeg" if ext in {".jpg", ".jpeg"} else "image/png"
+    b64 = base64.b64encode(data).decode("ascii")
+    return f"data:{mime};base64,{b64}"
 
 
 def build_svg(portrait_uri: str, landscape_uri: str) -> str:
-        return f"""<svg width=\"480\" height=\"640\" viewBox=\"0 0 480 640\" xmlns=\"http://www.w3.org/2000/svg\">
+    return f"""<svg width=\"480\" height=\"640\" viewBox=\"0 0 480 640\" xmlns=\"http://www.w3.org/2000/svg\">
     <image href=\"{portrait_uri}\" x=\"0\" y=\"0\" width=\"480\" height=\"640\" preserveAspectRatio=\"xMidYMid slice\"/>
     <rect width=\"480\" height=\"640\" fill=\"none\" stroke=\"#d4a373\" stroke-width=\"8\"/>
     <text x=\"240\" y=\"80\" font-family=\"Georgia\" font-size=\"36\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#ffd60a\">Urban Light</text>
@@ -35,7 +37,7 @@ def _dump_result(result: Any) -> Any:
 
 async def main() -> None:
     url = "http://127.0.0.1:6821/mcp"
-    resources_dir = Path("D:/_GITN/chatllama/SIMPLE/resources")
+    resources_dir = Path(__file__).resolve().parents[1] / "resources"
     portrait_path = resources_dir / "pic1-portrait.jpg"
     landscape_path = resources_dir / "pic2-landscape.jpg"
     svg_payload = build_svg(

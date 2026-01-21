@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 import importlib.util
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from logger import get_logger
-from column_chat_messages import MessageType, MessageBubble, create_message_widget
+from Engine.logger import get_logger
+from UI.column_chat_messages import MessageType, MessageBubble, create_message_widget
 from constants import SHOW_SAMPLE_MESSAGES, TOGGLE_OFF_COLOR, TOGGLE_ON_COLOR
 
 
@@ -67,6 +67,9 @@ class AttachmentsBar(QtWidgets.QFrame):
             self._layout.insertWidget(self._layout.count() - 1, label)
             self._paths.append(path)
 
+    def add_images(self, paths: Iterable[Path]) -> None:
+        self._add_images(paths)
+
     def get_paths(self) -> list[Path]:
         return list(self._paths)
 
@@ -82,6 +85,7 @@ class AttachmentsBar(QtWidgets.QFrame):
 class ChatColumnWidget(QtWidgets.QWidget):
     model_state_updated = QtCore.pyqtSignal(str)
     stream_chunk_received = QtCore.pyqtSignal(str)
+    stream_completed = QtCore.pyqtSignal()
     tool_call_received = QtCore.pyqtSignal(object)
     tool_result_received = QtCore.pyqtSignal(object, object)
     followup_reply_started = QtCore.pyqtSignal()
@@ -93,9 +97,14 @@ class ChatColumnWidget(QtWidgets.QWidget):
         self._chat_server = None
         self._current_receive: MessageBubble | None = None
         self._current_receive_pending = False
+        self._availability_callbacks: list[Callable[[str], None]] = []
+        self._availability_hooked = False
+        self._pending_availability: str | None = None
+        self._last_availability: str | None = None
 
         self.model_state_updated.connect(self._update_input_state)
         self.stream_chunk_received.connect(self._append_stream_chunk)
+        self.stream_completed.connect(self._finalize_stream_message)
         self.tool_call_received.connect(self._on_tool_call)
         self.tool_result_received.connect(self._on_tool_result)
         self.followup_reply_started.connect(self._on_followup_reply_started)
@@ -203,13 +212,15 @@ class ChatColumnWidget(QtWidgets.QWidget):
 
     def _remove_message(self, widget: MessageBubble) -> None:
         self._history_layout.removeWidget(widget)
+        widget.log_removed()
         widget.deleteLater()
 
     def _add_sample_messages(self) -> None:
-        resources_dir = Path(__file__).parent / "resources"
+        resources_dir = Path(__file__).resolve().parents[1] / "resources"
         samples = [
             (MessageType.USER, "User message example."),
             (MessageType.ASSISTANT, "Assistant response example."),
+            (MessageType.TOOLS_ADVERTISEMENT, "Tools Advertisement (2 tools)"),
             (MessageType.MCP_REQUEST, "tool.weather.get_forecast"),
             (MessageType.MCP_UI_REQUEST, "SVGCard.DrawCard"),
             (MessageType.THINKING, "Assistant thinking example..."),
@@ -260,7 +271,7 @@ class ChatColumnWidget(QtWidgets.QWidget):
         )
 
     def _register_model_state(self) -> None:
-        module_path = Path(__file__).parent / "manager_models.py"
+        module_path = Path(__file__).parent.parent / "Engine" / "manager_models.py"
         spec = importlib.util.spec_from_file_location("manager_models", module_path)
         if spec is None or spec.loader is None:
             self._logger.error("Failed to load llamacpp-server module")
@@ -274,7 +285,7 @@ class ChatColumnWidget(QtWidgets.QWidget):
 
         self._llama_module = model_module
 
-        chat_module_path = Path(__file__).parent / "manager_chats.py"
+        chat_module_path = Path(__file__).parent.parent / "Engine" / "manager_chats.py"
         chat_spec = importlib.util.spec_from_file_location("manager_chats", chat_module_path)
         if chat_spec is None or chat_spec.loader is None:
             self._logger.error("Failed to load chat manager module")
@@ -288,9 +299,12 @@ class ChatColumnWidget(QtWidgets.QWidget):
         try:
             self._chat_server = chat_module.LlamaChatManager()
             self._chat_server.register_stream_callback(self._on_stream_chunk)
+            self._chat_server.register_stream_end_callback(self._on_stream_end)
             self._chat_server.register_tool_call_callback(self._on_tool_call_callback)
             self._chat_server.register_tool_result_callback(self._on_tool_result_callback)
             self._chat_server.register_followup_callback(self._on_followup_callback)
+            self._chat_server.register_availability_callback(self._on_chat_availability)
+            self._availability_hooked = True
         except Exception as exc:
             self._logger.exception("Failed to initialize chat server: %s", exc)
             self._chat_server = None
@@ -303,6 +317,71 @@ class ChatColumnWidget(QtWidgets.QWidget):
         ready = state == "Ready"
         self._prompt_box.setEnabled(ready)
         self._send_button.setEnabled(ready)
+        if ready and self._pending_availability == "AVAILABLE":
+            self._logger.info("Autorun availability released after send enabled")
+            self._pending_availability = None
+            self._emit_availability("AVAILABLE")
+
+    def _on_chat_availability(self, state: str) -> None:
+        self._last_availability = state
+        if state == "AVAILABLE" and not self._send_button.isEnabled():
+            self._pending_availability = state
+            self._logger.info("Availability buffered until send is enabled")
+            return
+        self._pending_availability = None
+        self._emit_availability(state)
+
+    def _emit_availability(self, state: str) -> None:
+        for callback in list(self._availability_callbacks):
+            try:
+                callback(state)
+            except Exception:
+                continue
+
+    def register_availability_callback(self, callback: Callable[[str], None]) -> bool:
+        if self._chat_server is None:
+            self._logger.warning("Availability callback registration failed: chat server not initialized")
+            return False
+        self._availability_callbacks.append(callback)
+        if not self._availability_hooked:
+            self._chat_server.register_availability_callback(self._on_chat_availability)
+            self._availability_hooked = True
+        if self._last_availability == "AVAILABLE" and not self._send_button.isEnabled():
+            self._pending_availability = "AVAILABLE"
+        elif self._last_availability:
+            try:
+                callback(self._last_availability)
+            except Exception:
+                pass
+        return True
+
+    def autorun_stage_message(self, text: str, image_paths: Iterable[Path]) -> None:
+        paths = list(image_paths)
+        self._logger.info(
+            "Autorun staging message: chars=%d images=%d",
+            len(text),
+            len(paths),
+        )
+        self._prompt_box.setPlainText(text)
+        self._attachments_bar.clear()
+        if paths:
+            self._attachments_bar.add_images(paths)
+        self._prompt_box.setFocus()
+        cursor = self._prompt_box.textCursor()
+        cursor.movePosition(QtGui.QTextCursor.MoveOperation.End)
+        self._prompt_box.setTextCursor(cursor)
+
+    def autorun_submit_message(self) -> None:
+        if not self._send_button.isEnabled():
+            self._logger.warning("Autorun submit blocked: Send button disabled")
+            return
+        self._logger.info("Autorun submitting message via Send button")
+        self._send_button.click()
+
+    def get_last_assistant_message(self) -> str:
+        if self._chat_server is None:
+            return ""
+        return self._chat_server.get_last_assistant_message()
 
     def _on_send_clicked(self) -> None:
         text = self._prompt_box.toPlainText().strip()
@@ -311,7 +390,9 @@ class ChatColumnWidget(QtWidgets.QWidget):
         attachments = self._attachments_bar.get_paths()
 
         self._add_message(create_message_widget(MessageType.USER, text, attachments=attachments))
+        self._add_tools_advertisement()
         receive_widget = create_message_widget(MessageType.ASSISTANT, "")
+        receive_widget.start_stream_buffering()
         self._current_receive = receive_widget
         self._current_receive_pending = True
         self._add_message(receive_widget)
@@ -326,6 +407,9 @@ class ChatColumnWidget(QtWidgets.QWidget):
 
     def _on_stream_chunk(self, chunk: str) -> None:
         self.stream_chunk_received.emit(chunk)
+
+    def _on_stream_end(self) -> None:
+        self.stream_completed.emit()
 
     def _on_tool_call_callback(self, tool_call: object) -> None:
         self.tool_call_received.emit(tool_call)
@@ -344,6 +428,13 @@ class ChatColumnWidget(QtWidgets.QWidget):
             self._current_receive_pending = False
         self._current_receive.append_text(chunk)
         self._maybe_scroll_to_bottom()
+
+    def _finalize_stream_message(self) -> None:
+        if not self._current_receive:
+            return
+        if self._current_receive_pending:
+            return
+        self._current_receive.flush_stream_log()
 
     def _on_tool_call(self, tool_call: object) -> None:
         name = getattr(tool_call, "name", "tool")
@@ -379,9 +470,23 @@ class ChatColumnWidget(QtWidgets.QWidget):
 
     def _on_followup_reply_started(self) -> None:
         receive_widget = create_message_widget(MessageType.ASSISTANT, "")
+        receive_widget.start_stream_buffering()
         self._current_receive = receive_widget
         self._current_receive_pending = True
         self._add_message(receive_widget)
+
+    def _add_tools_advertisement(self) -> None:
+        if self._chat_server is None:
+            return
+        payload = self._chat_server.get_tools_advertisement()
+        if not payload:
+            return
+        content, details = payload
+        bubble = create_message_widget(MessageType.TOOLS_ADVERTISEMENT, content)
+        if details:
+            bubble.set_details(details)
+            bubble.set_details_visible(True)
+        self._add_message(bubble)
 
     def _on_auto_scroll_toggled(self, checked: bool) -> None:
         if checked:

@@ -7,12 +7,14 @@ from typing import Iterable, Sequence
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from logger import get_logger
+from Engine.logger import get_logger
+from Engine.interaction_logger import get_interaction_logger
 
 
 class MessageType(str, Enum):
     USER = "user"
     ASSISTANT = "assistant"
+    TOOLS_ADVERTISEMENT = "tools_advertisement"
     MCP_REQUEST = "mcp_request"
     MCP_UI_REQUEST = "mcp_ui_request"
     THINKING = "thinking"
@@ -31,6 +33,7 @@ class MessageStyle:
 MESSAGE_STYLES: dict[MessageType, MessageStyle] = {
     MessageType.USER: MessageStyle(label="User", fill="#f7f2ff"),
     MessageType.ASSISTANT: MessageStyle(label="Assistant", fill="#e8f1ff"),
+    MessageType.TOOLS_ADVERTISEMENT: MessageStyle(label="Tools Advertisement", fill="#e9f5ff"),
     MessageType.MCP_REQUEST: MessageStyle(label="MCP Request", fill="#fff2cc"),
     MessageType.MCP_UI_REQUEST: MessageStyle(label="MCP UI Request", fill="#fbe4ff"),
     MessageType.THINKING: MessageStyle(label="Thinking", fill="#f5f5f5"),
@@ -54,6 +57,9 @@ class MessageBubble(QtWidgets.QFrame):
         self._message_type = message_type
         self._attachments = list(attachments) if attachments else []
         self._message_label: QtWidgets.QLabel | None = None
+        self._details: list[tuple[str, str]] = list(details) if details else []
+        self._stream_buffering = False
+        self._stream_dirty = False
 
         self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Minimum)
 
@@ -104,6 +110,8 @@ class MessageBubble(QtWidgets.QFrame):
 
         if details:
             self.set_details(details)
+        if self._should_log_add():
+            self._log_interaction("add")
 
         outer_layout.addWidget(border, 0, 0)
 
@@ -118,11 +126,42 @@ class MessageBubble(QtWidgets.QFrame):
         if not self._message_label:
             return
         self._message_label.setText(self._message_label.text() + text)
+        if self._stream_buffering:
+            self._stream_dirty = True
+            return
+        self._log_interaction("update")
+
+    def start_stream_buffering(self) -> None:
+        self._stream_buffering = True
+        self._stream_dirty = False
+
+    def flush_stream_log(self) -> None:
+        if not self._stream_buffering:
+            return
+        text = self.get_text()
+        if self._stream_dirty and text:
+            self._log_interaction("update")
+        self._stream_dirty = False
+        self._stream_buffering = False
 
     def get_text(self) -> str:
         if not self._message_label:
             return ""
         return self._message_label.text()
+
+    def get_message_type(self) -> MessageType:
+        return self._message_type
+
+    def get_attachments(self) -> list[Path]:
+        return list(self._attachments)
+
+    def _should_log_add(self) -> bool:
+        return self._message_type in {
+            MessageType.USER,
+            MessageType.ERROR,
+            MessageType.PROGRESS,
+            MessageType.THINKING,
+        }
 
     def set_details(self, rows: Sequence[tuple[str, str]]) -> None:
         while self._details_layout.count():
@@ -131,6 +170,7 @@ class MessageBubble(QtWidgets.QFrame):
             if widget:
                 widget.deleteLater()
 
+        self._details = [(str(key), str(value)) for key, value in rows]
         for row_index, (key, value) in enumerate(rows):
             key_label = QtWidgets.QLabel(str(key))
             key_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop)
@@ -139,6 +179,22 @@ class MessageBubble(QtWidgets.QFrame):
             value_label.setWordWrap(True)
             self._details_layout.addWidget(key_label, row_index, 0)
             self._details_layout.addWidget(value_label, row_index, 1)
+        self._log_interaction("update")
+
+    def log_removed(self) -> None:
+        self._log_interaction("remove")
+
+    def _log_interaction(self, action: str) -> None:
+        logger = get_interaction_logger()
+        if logger is None:
+            return
+        logger.log(
+            message_type=self._message_type.value,
+            content=self.get_text(),
+            action=action,
+            details=self._details,
+            attachments=self._attachments,
+        )
 
     def set_details_visible(self, visible: bool) -> None:
         self._details_container.setVisible(visible)

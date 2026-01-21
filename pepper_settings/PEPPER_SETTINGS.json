@@ -1,6 +1,6 @@
 {
   "settings_folder": "D:\\_GITN\\chatllama\\pepper_settings",
-  "default_model": "Qwen3-VL-8B-Instruct-abliterated-v2.0.Q4_K_S",
+  "default_model": "Qwen2.5-VL-7B-Abliterated-Caption-it.Q4_K_S",
   "model_cache": {
     "Devstral-Small-2-24B-Instruct-2512-Q3_K_L": {
       "context_length": 0,
@@ -79,7 +79,7 @@
     }
   },
   "mcp_settings": {
-    "folder": "d:\\_GITN\\chatllama\\SIMPLE\\test_mcp",
+    "folder": "d:\\_GITN\\chatllama\\MCP_Local",
     "servers": {
       "fashion_stdio": {
         "enabled": true,
