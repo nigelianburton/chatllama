@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import json
 import os
+import socket
 import sys
 import threading
 from pathlib import Path
@@ -29,6 +32,11 @@ from constants import (
     TOGGLE_ON_COLOR,
 )
 
+SINGLE_INSTANCE_MUTEX = "ChatLlamaSingleInstance"
+SINGLE_INSTANCE_HOST = "127.0.0.1"
+SINGLE_INSTANCE_PORT = 38621
+_SINGLE_INSTANCE_HANDLE: int | None = None
+
 
 class UiBridge(QtCore.QObject):
     def __init__(self) -> None:
@@ -38,6 +46,103 @@ class UiBridge(QtCore.QObject):
     @QtCore.pyqtSlot(object)
     def invoke(self, func: Callable[[], object]) -> None:
         self.last_result = func()
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="ChatLlama SIMPLE")
+    parser.add_argument(
+        "--autorun",
+        nargs="*",
+        help="Run autorun instructions from a text file (optionally followed by image paths).",
+    )
+    parser.add_argument(
+        "--home",
+        action="store_true",
+        help=f"Use home settings folder ({SETTINGS_HOME}).",
+    )
+    parser.add_argument(
+        "--work",
+        action="store_true",
+        help=f"Use work settings folder ({SETTINGS_WORK}).",
+    )
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help=f"Use dev settings folder ({SETTINGS_DEV}).",
+    )
+    return parser
+
+
+def _send_args_to_instance(logger, argv: list[str]) -> bool:
+    payload = json.dumps({"argv": argv}).encode("utf-8")
+    try:
+        with socket.create_connection((SINGLE_INSTANCE_HOST, SINGLE_INSTANCE_PORT), timeout=2.0) as sock:
+            sock.sendall(payload)
+        logger.info("Single-instance: sent args to running instance: %s", " ".join(argv))
+        return True
+    except Exception as exc:
+        logger.error("Single-instance: failed to send args: %s", exc)
+        return False
+
+
+def _start_ipc_listener(logger, on_args: Callable[[list[str]], None]) -> None:
+    def _run() -> None:
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            server.bind((SINGLE_INSTANCE_HOST, SINGLE_INSTANCE_PORT))
+            server.listen(5)
+        except Exception as exc:
+            logger.error("Single-instance: IPC bind failed: %s", exc)
+            return
+        while True:
+            try:
+                client, _ = server.accept()
+            except Exception:
+                continue
+            with client:
+                data = b""
+                while True:
+                    chunk = client.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+                if not data:
+                    continue
+                try:
+                    payload = json.loads(data.decode("utf-8"))
+                except Exception as exc:
+                    logger.error("Single-instance: invalid IPC payload: %s", exc)
+                    continue
+                argv = payload.get("argv") if isinstance(payload, dict) else None
+                if not isinstance(argv, list):
+                    continue
+                logger.info("Single-instance: received args: %s", " ".join(str(a) for a in argv))
+                on_args([str(a) for a in argv])
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _acquire_single_instance(logger, argv: list[str]) -> bool:
+    if sys.platform.startswith("win"):
+        global _SINGLE_INSTANCE_HANDLE
+        mutex = ctypes.windll.kernel32.CreateMutexW(None, False, SINGLE_INSTANCE_MUTEX)
+        already_running = ctypes.windll.kernel32.GetLastError() == 183
+        if already_running:
+            _send_args_to_instance(logger, argv)
+            return False
+        _SINGLE_INSTANCE_HANDLE = int(mutex)
+        logger.info("Single-instance: mutex acquired")
+        return True
+    try:
+        test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        test_sock.bind((SINGLE_INSTANCE_HOST, SINGLE_INSTANCE_PORT))
+        test_sock.close()
+        logger.info("Single-instance: lock acquired")
+        return True
+    except Exception:
+        _send_args_to_instance(logger, argv)
+        return False
 
 
 class ColumnPanel(QtWidgets.QFrame):
@@ -153,6 +258,7 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
         self._settings_container.model_changed.connect(self._on_model_changed)
         self._add_column("Settings", "#f7e0e0", content_widget=self._settings_container)
         self._chat_container = ChatColumnWidget()
+        self._settings_container.mcp_settings_changed.connect(self._chat_container.refresh_mcp_tools)
         self._chat_container.model_state_updated.connect(self._on_model_state_updated)
         self._add_column("Chat", "#e0f7e0", content_widget=self._chat_container)
         self._cards_container = ColumnCardsWidget()
@@ -252,6 +358,7 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
                     ui_delete_card=self._delete_svg_card,
                 )
                 self._mcp_server.start()
+                self._chat_container.refresh_mcp_tools()
             except Exception as exc:
                 self._logger.exception("Failed to start internal MCP server: %s", exc)
 
@@ -260,7 +367,7 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
 
     def _exit_if_idle(self) -> None:
         self._logger.info("Exit-idle requested; capturing screenshot and exiting")
-        Utilities.log_screenshot(self._log_file)
+        Utilities.log_screenshot(self._log_file, widget=self)
         app = QtWidgets.QApplication.instance()
         if app:
             app.quit()
@@ -292,27 +399,7 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ChatLlama SIMPLE")
-    parser.add_argument(
-        "--autorun",
-        nargs="*",
-        help="Run autorun instructions from a text file (optionally followed by image paths).",
-    )
-    parser.add_argument(
-        "--home",
-        action="store_true",
-        help=f"Use home settings folder ({SETTINGS_HOME}).",
-    )
-    parser.add_argument(
-        "--work",
-        action="store_true",
-        help=f"Use work settings folder ({SETTINGS_WORK}).",
-    )
-    parser.add_argument(
-        "--dev",
-        action="store_true",
-        help=f"Use dev settings folder ({SETTINGS_DEV}).",
-    )
+    parser = _build_arg_parser()
     args = parser.parse_args()
 
     settings_folder = Path(SETTINGS_DEV)
@@ -330,6 +417,10 @@ def main() -> None:
     logger.info("Conda env: %s", os.environ.get("CONDA_PREFIX", "(not set)"))
     init_interaction_logger(config.log_file)
 
+    if not _acquire_single_instance(logger, sys.argv[1:]):
+        logger.info("Single-instance: exiting secondary instance")
+        return
+
     app = QtWidgets.QApplication(sys.argv)
     window = ChatLlamaWindow(
         exit_idle=False,
@@ -337,14 +428,15 @@ def main() -> None:
         settings_folder=settings_folder,
     )
     window.show()
+    def _start_autorun(autorun_args: list[str]) -> None:
+        if not autorun_args:
+            return
+        QtCore.QTimer.singleShot(0, lambda: window.schedule_exit(60000))
 
-    if args.autorun is not None:
         def _finish(success: bool, message: str) -> None:
             if success:
                 logger.info("Autorun completion signaled; scheduling exit")
-                def _schedule() -> None:
-                    window.schedule_exit(1000)
-                window._invoke_ui(_schedule)
+                window._invoke_ui(lambda: window.schedule_exit(1000))
             else:
                 logger.error(message)
                 app = QtWidgets.QApplication.instance()
@@ -375,7 +467,7 @@ def main() -> None:
                 return str(result or "")
 
             success, message = run_autorun(
-                args.autorun,
+                autorun_args,
                 ui_stage_message=_stage,
                 ui_submit_message=_submit,
                 register_availability_callback=_register_availability,
@@ -384,6 +476,17 @@ def main() -> None:
             _finish(success, message)
 
         threading.Thread(target=_run, daemon=True).start()
+
+    def _handle_forwarded_args(argv: list[str]) -> None:
+        forwarded = parser.parse_args(argv)
+        if forwarded.autorun is not None:
+            logger.info("Single-instance: processing forwarded autorun")
+            _start_autorun(forwarded.autorun)
+
+    _start_ipc_listener(logger, _handle_forwarded_args)
+
+    if args.autorun is not None:
+        _start_autorun(args.autorun)
     sys.exit(app.exec())
 
 

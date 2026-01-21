@@ -17,6 +17,8 @@ from PyQt6 import QtCore, QtWidgets
 from Engine.logger import get_logger
 from constants import (
     DEFAULT_MODEL_FILE,
+    DEFAULT_TOOL_PREAMBLE_CARDS,
+    DEFAULT_TOOL_PREAMBLE_GENERAL,
     MCP_LABEL_WIDTH,
     MCP_PORT_INPUT_WIDTH,
     PEPPER_SETTINGS_FILE,
@@ -36,6 +38,7 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
     cache_warm_finished = QtCore.pyqtSignal()
     model_changed = QtCore.pyqtSignal(str)
     model_state_updated = QtCore.pyqtSignal(str)
+    mcp_settings_changed = QtCore.pyqtSignal()
 
     def __init__(self, settings_folder: Path) -> None:
         super().__init__()
@@ -49,6 +52,8 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         self._last_load_enabled: bool | None = None
         self._mcp_folder = Path(__file__).resolve().parents[1] / "MCP_Local"
         self._mcp_entries: dict[str, dict[str, object]] = {}
+        self._mcp_polling = False
+        self._mcp_poll_lock = threading.Lock()
         self._mcp_timer = QtCore.QTimer(self)
         self._mcp_timer.setInterval(5000)
         self._mcp_timer.timeout.connect(self._poll_http_endpoints)
@@ -90,6 +95,45 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         self._built_in_widget = SettingsBuiltInMcps()
         layout.addWidget(self._built_in_widget)
 
+        tool_preamble_frame = QtWidgets.QFrame()
+        tool_preamble_frame.setStyleSheet(
+            "QFrame { background: #f9f9ff; border: 1px solid #c6d3e8; border-radius: 6px; }"
+        )
+        tool_preamble_layout = QtWidgets.QVBoxLayout(tool_preamble_frame)
+        tool_preamble_layout.setContentsMargins(8, 8, 8, 8)
+        tool_preamble_layout.setSpacing(6)
+
+        tool_preamble_title = QtWidgets.QLabel("Tool preamble")
+        tool_preamble_title.setStyleSheet("font-weight: bold; color: #3a3a3a;")
+        tool_preamble_layout.addWidget(tool_preamble_title)
+
+        general_label = QtWidgets.QLabel("General tools preamble")
+        tool_preamble_layout.addWidget(general_label)
+
+        self._tool_preamble_general_edit = QtWidgets.QPlainTextEdit()
+        self._tool_preamble_general_edit.setPlaceholderText(DEFAULT_TOOL_PREAMBLE_GENERAL)
+        self._tool_preamble_general_edit.setFixedHeight(72)
+        tool_preamble_layout.addWidget(self._tool_preamble_general_edit)
+
+        cards_label = QtWidgets.QLabel("Card tools preamble")
+        tool_preamble_layout.addWidget(cards_label)
+
+        self._tool_preamble_cards_edit = QtWidgets.QPlainTextEdit()
+        self._tool_preamble_cards_edit.setPlaceholderText(DEFAULT_TOOL_PREAMBLE_CARDS)
+        self._tool_preamble_cards_edit.setFixedHeight(96)
+        tool_preamble_layout.addWidget(self._tool_preamble_cards_edit)
+
+        tool_preamble_buttons = QtWidgets.QHBoxLayout()
+        tool_preamble_buttons.addStretch(1)
+
+        self._tool_preamble_save = QtWidgets.QPushButton("Save")
+        self._tool_preamble_save.setFixedWidth(80)
+        self._tool_preamble_save.clicked.connect(self._save_tool_preamble)
+        tool_preamble_buttons.addWidget(self._tool_preamble_save)
+
+        tool_preamble_layout.addLayout(tool_preamble_buttons)
+        layout.addWidget(tool_preamble_frame)
+
 
         placeholder = QtWidgets.QLabel("Settings")
         placeholder.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
@@ -99,6 +143,7 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         self._register_model_discovery()
         self._refresh_mcp_list()
         self._refresh_built_in_mcps()
+        self._load_tool_preamble()
 
     def _ensure_settings_file(self) -> None:
         self._settings_folder.mkdir(parents=True, exist_ok=True)
@@ -109,6 +154,8 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
                     {
                         "settings_folder": str(self._settings_folder),
                         "default_model": DEFAULT_MODEL_FILE,
+                        "tool_preamble_general": DEFAULT_TOOL_PREAMBLE_GENERAL,
+                        "tool_preamble_cards": DEFAULT_TOOL_PREAMBLE_CARDS,
                     },
                     indent=2,
                 )
@@ -120,8 +167,21 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         except Exception:
             data = {}
 
+        dirty = False
         if "default_model" not in data:
             data["default_model"] = DEFAULT_MODEL_FILE
+            dirty = True
+        if not data.get("tool_preamble_general"):
+            data["tool_preamble_general"] = DEFAULT_TOOL_PREAMBLE_GENERAL
+            dirty = True
+        if not data.get("tool_preamble_cards"):
+            legacy_preamble = data.get("tool_preamble")
+            data["tool_preamble_cards"] = legacy_preamble or DEFAULT_TOOL_PREAMBLE_CARDS
+            dirty = True
+        if "built_in_mcps" not in data:
+            data["built_in_mcps"] = {}
+            dirty = True
+        if dirty:
             settings_path.write_text(json.dumps(data, indent=2))
 
     def _load_settings_cache(self) -> None:
@@ -144,6 +204,65 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         except Exception:
             data = {}
         data["mcp_settings"] = mcp_data
+        settings_path.write_text(json.dumps(data, indent=2))
+
+    def _get_built_in_mcp_state(self, name: str) -> dict:
+        settings_path = self._settings_folder / PEPPER_SETTINGS_FILE
+        try:
+            data = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+        except Exception:
+            data = {}
+        built_in = data.setdefault("built_in_mcps", {})
+        return built_in.setdefault(name, {})
+
+    def _store_built_in_mcp_state(self, name: str, state: dict) -> None:
+        settings_path = self._settings_folder / PEPPER_SETTINGS_FILE
+        try:
+            data = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+        except Exception:
+            data = {}
+        built_in = data.setdefault("built_in_mcps", {})
+        built_in[name] = state
+        settings_path.write_text(json.dumps(data, indent=2))
+        self.mcp_settings_changed.emit()
+
+    def _load_tool_preamble(self) -> None:
+        settings_path = self._settings_folder / PEPPER_SETTINGS_FILE
+        if not settings_path.exists():
+            self._tool_preamble_general_edit.setPlainText(DEFAULT_TOOL_PREAMBLE_GENERAL)
+            self._tool_preamble_cards_edit.setPlainText(DEFAULT_TOOL_PREAMBLE_CARDS)
+            return
+        try:
+            data = json.loads(settings_path.read_text())
+        except Exception:
+            data = {}
+        general = data.get("tool_preamble_general") or ""
+        cards = data.get("tool_preamble_cards") or ""
+        legacy = data.get("tool_preamble")
+        if legacy and not cards:
+            cards = legacy
+            data["tool_preamble_cards"] = cards
+        if not general:
+            general = DEFAULT_TOOL_PREAMBLE_GENERAL
+        if not cards:
+            cards = DEFAULT_TOOL_PREAMBLE_CARDS
+        self._tool_preamble_general_edit.setPlainText(general)
+        self._tool_preamble_cards_edit.setPlainText(cards)
+        if legacy:
+            data.setdefault("tool_preamble_general", general)
+            data.pop("tool_preamble", None)
+            settings_path.write_text(json.dumps(data, indent=2))
+
+    def _save_tool_preamble(self) -> None:
+        settings_path = self._settings_folder / PEPPER_SETTINGS_FILE
+        try:
+            data = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+        except Exception:
+            data = {}
+        general = self._tool_preamble_general_edit.toPlainText().strip()
+        cards = self._tool_preamble_cards_edit.toPlainText().strip()
+        data["tool_preamble_general"] = general or DEFAULT_TOOL_PREAMBLE_GENERAL
+        data["tool_preamble_cards"] = cards or DEFAULT_TOOL_PREAMBLE_CARDS
         settings_path.write_text(json.dumps(data, indent=2))
 
 
@@ -231,11 +350,19 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
             if entry.name == "__init__.py":
                 continue
             name = entry.stem
+            state = self._get_built_in_mcp_state(name)
+            enabled = bool(state.get("enabled", True))
+
+            def handle_toggle_change(checked: bool, mcp_name: str = name) -> None:
+                self._store_built_in_mcp_state(mcp_name, {"enabled": checked})
+
             widget = BuiltInMcpEntryWidget(
                 name=name,
                 url=f"http://{local_ip}",
                 port="6821",
                 methods=["CreateCard", "DrawCard", "DeleteCard"],
+                enabled=enabled,
+                on_toggle=handle_toggle_change,
             )
             self._built_in_widget.panel_layout.insertWidget(
                 self._built_in_widget.panel_layout.count() - 1,
@@ -417,6 +544,7 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
             mcp_settings["servers"] = servers
             data["mcp_settings"] = mcp_settings
             settings_path.write_text(json.dumps(data, indent=2))
+            self.mcp_settings_changed.emit()
         self._refresh_mcp_list()
 
     def _get_mcp_state(self, name: str) -> dict:
@@ -440,6 +568,7 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         servers[name] = state
         mcp_settings["folder"] = str(self._mcp_folder)
         self._save_mcp_settings(mcp_settings)
+        self.mcp_settings_changed.emit()
 
     def _populate_method_toggles(self, name: str, state: dict) -> None:
         entry = self._mcp_entries.get(name)
@@ -578,6 +707,12 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         self._set_method_widgets_enabled(name, state.get("enabled", False))
 
     def _poll_http_endpoints(self) -> None:
+        with self._mcp_poll_lock:
+            if self._mcp_polling:
+                return
+            self._mcp_polling = True
+
+        targets: list[tuple[str, str, bool]] = []
         for name, entry in self._mcp_entries.items():
             if not entry["http_radio"].isChecked():
                 continue
@@ -586,11 +721,37 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
             if not url:
                 continue
             server_url = f"{url}:{port}/mcp" if port else url
-            responsive = self._probe_http(server_url)
+            toggle_checked = bool(entry["toggle"].isChecked())
+            targets.append((name, server_url, toggle_checked))
+
+        def _worker() -> None:
+            results: list[tuple[str, bool, bool]] = []
+            try:
+                for name, server_url, toggle_checked in targets:
+                    responsive = self._probe_http(server_url)
+                    results.append((name, responsive, toggle_checked))
+                QtCore.QMetaObject.invokeMethod(
+                    self,
+                    "_apply_http_probe_results",
+                    QtCore.Qt.ConnectionType.QueuedConnection,
+                    QtCore.Q_ARG(object, results),
+                )
+            finally:
+                with self._mcp_poll_lock:
+                    self._mcp_polling = False
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    @QtCore.pyqtSlot(object)
+    def _apply_http_probe_results(self, results: object) -> None:
+        for name, responsive, toggle_checked in results or []:
+            entry = self._mcp_entries.get(name)
+            if not entry:
+                continue
             color = "#2e7d32" if responsive else "#b71c1c"
             entry["url_label"].setStyleSheet(f"background-color: {color}; color: #fff; padding: 2px;")
             entry["port_label"].setStyleSheet(f"background-color: {color}; color: #fff; padding: 2px;")
-            if responsive and entry["toggle"].isChecked():
+            if responsive and toggle_checked:
                 self._maybe_discover_methods(name)
 
     def _probe_http(self, url: str) -> bool:

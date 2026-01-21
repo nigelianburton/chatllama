@@ -10,7 +10,7 @@ from Engine.logger import get_logger
 
 class Utilities:
     @staticmethod
-    def log_screenshot(log_file: Path) -> Optional[Path]:
+    def log_screenshot(log_file: Path, widget: Optional[QtWidgets.QWidget] = None) -> Optional[Path]:
         logger = get_logger("Utilities")
         try:
             screen = QtWidgets.QApplication.primaryScreen()
@@ -28,7 +28,13 @@ class Utilities:
                     break
                 index += 1
 
-            pixmap = screen.grabWindow(0)
+            window_id = 0
+            if widget is not None:
+                try:
+                    window_id = int(widget.winId())
+                except Exception:
+                    window_id = 0
+            pixmap = screen.grabWindow(window_id)
             if pixmap.isNull():
                 logger.error("Screenshot capture returned empty pixmap")
                 return None

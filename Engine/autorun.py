@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from pathlib import Path
@@ -34,20 +35,67 @@ def run_autorun(
     if not text_path.exists():
         return False, f"Autorun file not found: {text_path}"
 
-    image_paths = [Path(p) for p in args[1:]]
-    for path in image_paths:
-        if not path.exists():
-            return False, f"Autorun image not found: {path}"
+    if text_path.suffix.lower() != ".json":
+        return False, f"Autorun now requires JSON input: {text_path}"
 
-    lines = [line.strip() for line in text_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    if not lines:
+    try:
+        payload = json.loads(text_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return False, f"Autorun JSON parse failed: {exc}"
+
+    messages: list[dict[str, object]] = []
+    if isinstance(payload, dict):
+        raw_messages = payload.get("messages")
+        if raw_messages is None:
+            prompt = payload.get("prompt")
+            if isinstance(prompt, str) and prompt.strip():
+                raw_messages = [prompt]
+        if isinstance(raw_messages, list):
+            for item in raw_messages:
+                if isinstance(item, str):
+                    messages.append({"text": item, "images": []})
+                elif isinstance(item, dict):
+                    text = (
+                        item.get("text")
+                        or item.get("message")
+                        or item.get("prompt")
+                    )
+                    if isinstance(text, str) and text.strip():
+                        images = item.get("images") or []
+                        if isinstance(images, str):
+                            images = [images]
+                        if not isinstance(images, list):
+                            images = []
+                        messages.append({"text": text, "images": images})
+        if not messages:
+            return False, f"Autorun JSON has no messages: {text_path}"
+    else:
+        return False, f"Autorun JSON must be an object: {text_path}"
+
+    parsed_messages: list[tuple[str, list[Path]]] = []
+    for message in messages:
+        text = str(message.get("text") or "").strip()
+        if not text:
+            continue
+        image_values = message.get("images") or []
+        image_paths: list[Path] = []
+        if isinstance(image_values, list):
+            for item in image_values:
+                if not item:
+                    continue
+                path = Path(str(item))
+                if not path.exists():
+                    return False, f"Autorun image not found: {path}"
+                image_paths.append(path)
+        parsed_messages.append((text, image_paths))
+
+    if not parsed_messages:
         return False, f"Autorun file is empty: {text_path}"
 
     logger.info(
-        "Autorun request: text=%s lines=%d images=%d",
+        "Autorun request: text=%s messages=%d",
         text_path,
-        len(lines),
-        len(image_paths),
+        len(parsed_messages),
     )
 
     chat_manager: Optional[LlamaChatManager] = None
@@ -87,8 +135,8 @@ def run_autorun(
     ):
         return False, "Autorun timed out waiting for chat availability."
 
-    total = len(lines)
-    for index, line in enumerate(lines, start=1):
+    total = len(parsed_messages)
+    for index, (line, image_paths) in enumerate(parsed_messages, start=1):
         if not _wait_for_availability(
             availability_event,
             availability_lock,

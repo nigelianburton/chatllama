@@ -89,6 +89,7 @@ class MessageBubble(QtWidgets.QFrame):
         message.setWordWrap(True)
         message.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop)
         message.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
+        message.setStyleSheet("border: 0px; background: transparent;")
         content_row.addWidget(message, 1)
         self._message_label = message
 

@@ -7,6 +7,17 @@ DEFAULT_MODEL_FILE = r"D:\LLM Models\mradermacher\Qwen3-VL-8B-Instruct-abliterat
 DEFAULT_MMPROJ_FILE = r"D:\LLM Models\mradermacher\Qwen3-VL-8B-Instruct-abliterated-v2.0-GGUF\Qwen3-VL-8B-Instruct-abliterated-v2.0.mmproj-f16.gguf"
 LLAMA_CPP_MODEL_INIT_FILE = "LLAMA_CPP_MODEL_INIT.ini"
 PEPPER_SETTINGS_FILE = "PEPPER_SETTINGS.json"
+DEFAULT_TOOL_PREAMBLE_GENERAL = "Tools are available for this chat."
+DEFAULT_TOOL_PREAMBLE_CARDS = (
+	"SVG cards are UI-only. Do NOT output raw SVG in assistant messages. "
+	"Always call internal.CreateCard first to get a guid, then call internal.DrawCard "
+	"with a full <svg> document sized 480x640 (portrait) or 640x480 (landscape) "
+	"ONLY inside the DrawCard tool call arguments. "
+	"Never invent guids and never paste SVG in chat content."
+)
+INTERNAL_MCP_NAME = "internal"
+INTERNAL_MCP_HOST = "127.0.0.1"
+INTERNAL_MCP_PORT = 6821
 AUTORUN_READY_TIMEOUT_SECONDS = 10
 AUTORUN_RESPONSE_TIMEOUT_SECONDS = 60
 AUTORUN_BUSY_ACK_TIMEOUT_SECONDS = 1

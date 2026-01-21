@@ -16,6 +16,9 @@ class MCPClientManager:
     def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         return asyncio.run(self._call_tool_async(name, arguments))
 
+    def get_instructions(self, timeout: float | None = 3.0) -> str | None:
+        return asyncio.run(self._get_instructions_async(timeout))
+
     async def _list_tools_async(self, timeout: float | None) -> list[Any]:
         from fastmcp import Client
 
@@ -31,6 +34,19 @@ class MCPClientManager:
             result = await client.call_tool(name, arguments)
             value = getattr(result, "data", result)
             return _normalize_result(value)
+
+    async def _get_instructions_async(self, timeout: float | None) -> str | None:
+        from fastmcp import Client
+
+        async with Client(self._server_source) as client:
+            if client.initialize_result is None:
+                if timeout is None:
+                    await client.initialize()
+                else:
+                    await asyncio.wait_for(client.initialize(), timeout=timeout)
+            initialize_result = client.initialize_result
+            instructions = getattr(initialize_result, "instructions", None)
+            return instructions or None
 
 
 def _normalize_result(value: Any) -> Any:

@@ -1,0 +1,1 @@
+Create a new SVG card in portrait orientation, then draw a full 480x640 SVG that says "Hello World" centered on a light background. Use CreateCard first, then DrawCard with valid SVG markup sized 480x640.

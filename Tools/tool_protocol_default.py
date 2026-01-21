@@ -11,7 +11,19 @@ _TOOL_JSON_RE = re.compile(r"\{\s*\"name\"\s*:\s*\"(?P<name>[^\"]+)\"\s*,\s*\"ar
 
 def render_tools(tools: Iterable[dict[str, Any]], system_prompt: str | None = None) -> str:
     prompt = system_prompt or ""
-    return prompt
+    tools_list = list(tools)
+    if not tools_list:
+        return prompt
+    tools_json = json.dumps(tools_list, indent=2)
+    instructions = (
+        "Tools are available. When you need to use a tool, respond with ONLY a JSON object in this exact format: "
+        '{"name": "tool_name", "arguments": { ... }}. Do not include any other text.'
+    )
+    blocks = [prompt] if prompt else []
+    blocks.append(instructions)
+    blocks.append("Available tools (JSON):")
+    blocks.append(tools_json)
+    return "\n\n".join(blocks)
 
 
 def parse_tool_calls(text: str) -> list[ToolCall]:

@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+from typing import Callable
+
 from PyQt6 import QtCore, QtWidgets
 
-from constants import MCP_LABEL_WIDTH, MCP_PORT_INPUT_WIDTH
+from constants import MCP_LABEL_WIDTH, MCP_PORT_INPUT_WIDTH, TOGGLE_DISABLED_COLOR, TOGGLE_OFF_COLOR, TOGGLE_ON_COLOR
 
 
 class BuiltInMcpEntryWidget(QtWidgets.QFrame):
-    def __init__(self, name: str, url: str, port: str, methods: list[str]) -> None:
+    def __init__(
+        self,
+        name: str,
+        url: str,
+        port: str,
+        methods: list[str],
+        enabled: bool = True,
+        on_toggle: Callable[[bool], None] | None = None,
+    ) -> None:
         super().__init__()
         self.setStyleSheet("QFrame { border: 1px solid #ccc; background: #fafafa; }")
 
@@ -18,15 +28,39 @@ class BuiltInMcpEntryWidget(QtWidgets.QFrame):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
 
+        toggle_style = (
+            f"QToolButton {{ background: {TOGGLE_OFF_COLOR}; padding: 4px 8px; border: 1px solid #999; color: #b00020; }}"
+            f"QToolButton:checked {{ background: {TOGGLE_ON_COLOR}; color: #000000; }}"
+            f"QToolButton:disabled {{ background: {TOGGLE_DISABLED_COLOR}; color: #777; }}"
+        )
+
+        toggle = QtWidgets.QToolButton()
+        toggle.setCheckable(True)
+        toggle.setChecked(enabled)
+        toggle.setStyleSheet(toggle_style)
+
+        def update_toggle_text(checked: bool) -> None:
+            toggle.setText("✓" if checked else "✗")
+
+        update_toggle_text(enabled)
+
         name_label = QtWidgets.QLabel(name)
         name_label.setStyleSheet("font-weight: bold;")
 
         http_label = QtWidgets.QLabel("http")
         http_label.setStyleSheet("padding: 2px 6px; border: 1px solid #999; background: #f0f0f0;")
 
+        row.addWidget(toggle)
         row.addWidget(name_label, 1)
         row.addWidget(http_label)
         layout.addLayout(row)
+
+        def handle_toggle_change(checked: bool) -> None:
+            update_toggle_text(checked)
+            if on_toggle:
+                on_toggle(checked)
+
+        toggle.toggled.connect(handle_toggle_change)
 
         http_row = QtWidgets.QHBoxLayout()
         http_row.setContentsMargins(0, 0, 0, 0)

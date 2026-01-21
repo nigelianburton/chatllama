@@ -1,8 +1,18 @@
+**Overview:** ChatLlama is a Python + Qt desktop front end for local LLMs, built around llama-server (C:\Llama) with a three-column UI (Settings, Chat, Cards) and a cards-first workflow.
+
 **Environment mandate:** Always run commands inside the `chatllama2` conda environment (`conda activate chatllama2`) before executing Python or scripts.
 
-ChatLlama is a Python + Qt chat front end for local LLMs, built to use the lightweight llama-server nightly located in C:\Llama. The app is a three-column UI (Settings, Chat, Cards) focused on fast local iteration without LM Studio. It supports multimodal prompts with drag-and-drop image attachments, and the chat layer parses tool requests and presents tool calls/results in the conversation.
-
-The differentiator is the cards concept and MCP integration: cards are writable objects where the LLM can render outputs (first card is SVG, with more cards planned). ChatLlama includes a built-in MCP server so internal tools (like the SVG card) can be advertised to the model, while also supporting external MCP tools and serving as an HTTP stateful MCP server for other clients to call. The target audience for now is the author, with the immediate goal of stabilizing this workflow over the next 24 hours.
+Automation and tooling
+- The chat layer parses tool requests and surfaces tool calls/results in the conversation.
+- The internal MCP server advertises card tools (first card: SVG) and supports external MCP tools over HTTP/stdio.
+- Autorun uses JSON input with explicit message boundaries; avoid silent fallbacks during development.
+	- Single-instance behavior: if ChatLlama is already running, new launches forward the args (including autorun) to the existing instance and then exit.
+	Example:
+	{
+		"messages": [
+			{"text": "...", "images": ["D:/path/to/image.png"]}
+		]
+	}
 
 Paths and defaults
 - Default settings folder (dev): D:\_GITN\chatllama\pepper_settings
@@ -18,6 +28,15 @@ Paths and defaults
 
 Development preference
 - Avoid fallbacks that mask errors during development. If a dependency fails (e.g., llama-server), surface the failure rather than silently degrading.
+
+File organization
+- PEPPER.py: main Qt window, splitters, toolbars, wiring
+- Engine/: runtime logic (models, MCP servers, chat manager, logging utilities)
+- UI/: Qt widgets for Settings, Chat, Cards, and subpanels
+- MCP_Internal/: internal MCP tools (SVG card)
+- Tools/: tool protocol adapters, registry, executor, MCP client manager
+- scripts/, testers/, tests/: scripts and validation harnesses
+- pepper_settings/: local settings, caches, and logs
 
 SIMPLE key files overview
 - PEPPER.py: main Qt window, splitters, toolbars, wiring
@@ -44,4 +63,13 @@ Future Plans
 
 Recent progress
 - MCP integration now supports both stdio and HTTP servers simultaneously (fashion_stdio 2026 + fashion_http 1960s), and the LLM can route to either.
+
+Logs
+- Location: settings_folder\logs (dev default: D:\_GITN\chatllama\pepper_settings\logs)
+- Interaction log: interaction.json (per-session summary)
+- Session logs: session_YYYY-MM-DD_HH-MM-SS.log and screenshots
+
+Todo
+- If the LLM is flagged as being able to view images, MCP responses should include a screen capture of the resulting card.
+- Images consume context, so message history should not retain these temporary images; only the latest should be included.
 

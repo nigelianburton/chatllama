@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from constants import INTERNAL_MCP_NAME
+
 from .mcp_client_manager import MCPClientManager
 
 from .tool_protocol_base import ToolCall
@@ -24,8 +26,13 @@ class ToolExecutor:
         if tool is None:
             return {"error": "unknown tool", "name": tool_call.name}
         if not tool.enabled:
+            if tool_call.name == f"{INTERNAL_MCP_NAME}.DrawCard":
+                return {
+                    "error": "DrawCard unavailable until CreateCard returns a GUID",
+                    "hint": "Call internal.CreateCard first, then pass its GUID to internal.DrawCard.",
+                }
             return {"error": "tool disabled", "name": tool_call.name}
-        if tool.source == "mcp":
+        if tool.source in {"mcp", "internal"}:
             mapped = self._mcp_tool_map.get(tool_call.name)
             if mapped is not None:
                 manager, tool_name = mapped

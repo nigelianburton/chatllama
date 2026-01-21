@@ -1,0 +1,7 @@
+{
+  "messages": [
+    {
+      "text": "Create a new SVG card in portrait orientation. Use images from the resources folder by filename. Call internal.CreateCard first, then internal.DrawCard with the full SVG document. Use EXACTLY the SVG provided between <svg>...</svg> with no extra text.\n\n<svg width=\"480\" height=\"640\" viewBox=\"0 0 480 640\" xmlns=\"http://www.w3.org/2000/svg\">\n  <image href=\"resource:pic1-portrait.jpg\" x=\"0\" y=\"0\" width=\"480\" height=\"640\" preserveAspectRatio=\"xMidYMid slice\"/>\n  <rect width=\"480\" height=\"640\" fill=\"none\" stroke=\"#d4a373\" stroke-width=\"8\"/>\n  <text x=\"240\" y=\"80\" font-family=\"Georgia\" font-size=\"36\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#ffd60a\">Urban Light</text>\n  <text x=\"240\" y=\"110\" font-family=\"Arial\" font-size=\"14\" text-anchor=\"middle\" fill=\"#ff6fb7\">January 2026 • Special Design Issue</text>\n  <text x=\"240\" y=\"420\" font-family=\"Arial\" font-size=\"22\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#ffd60a\">Inside the New Studio Wave</text>\n  <text x=\"240\" y=\"450\" font-family=\"Arial\" font-size=\"14\" text-anchor=\"middle\" fill=\"#ff6fb7\">Profiles • Trends • Tools</text>\n  <rect x=\"320\" y=\"500\" width=\"120\" height=\"100\" fill=\"#f2f2f2\" stroke=\"#cfcfcf\"/>\n  <image href=\"resource:pic2-landscape.jpg\" x=\"320\" y=\"500\" width=\"120\" height=\"100\" preserveAspectRatio=\"xMidYMid slice\"/>\n</svg>"
+    }
+  ]
+}

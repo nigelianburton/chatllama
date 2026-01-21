@@ -72,22 +72,6 @@ FASHION_LOOKS_2026 = [
 
 
 @server.tool()
-def get_fashion_look() -> dict:
-    """Get a hot woman's fashion trend for 2026, randomly selected.
-    
-    These are the most anticipated fashion trends that will be hot in 2026.
-    Returns a complete outfit inspiration with name, description, key items, colors, and vibe.
-    """
-    look = random.choice(FASHION_LOOKS_2026)
-    return {
-        "success": True,
-        "look": look,
-        "styling_tip": f"{look['name']} is trending big in 2026! Pair these items with confidence and your personal flair!",
-        "total_looks_available": len(FASHION_LOOKS_2026)
-    }
-
-
-@server.tool()
 def get_all_looks() -> dict:
     """Get all hot fashion trends for 2026.
     
@@ -108,14 +92,13 @@ def get_fashion_look() -> dict:
     
     Use this instead of get_look_by_vibe if you need any trending look.
     These are the most anticipated fashion trends that will be hot in 2026.
-    Returns a complete outfit inspiration with name, description, key items, colors, and vibe.
+    Returns a complete outfit inspiration with name, description, key items, colors, vibe, and a styling tip.
     """
     look = random.choice(FASHION_LOOKS_2026)
     return {
         "success": True,
         "look": look,
-        "styling_tip": f"{look['name']} is trending big in 2026! Pair these items with confidence and your personal flair!",
-        "total_looks_available": len(FASHION_LOOKS_2026)
+        "styling_tip": f"{look['name']} is trending big in 2026! Pair these items with confidence and your personal flair!"
     }
 
 

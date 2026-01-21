@@ -383,13 +383,30 @@ class ChatColumnWidget(QtWidgets.QWidget):
             return ""
         return self._chat_server.get_last_assistant_message()
 
+    def refresh_mcp_tools(self) -> None:
+        if self._chat_server is None:
+            return
+        self._chat_server.reload_mcp_tools()
+
     def _on_send_clicked(self) -> None:
         text = self._prompt_box.toPlainText().strip()
         if not text:
             return
         attachments = self._attachments_bar.get_paths()
+        tool_names: list[str] = []
+        if self._chat_server is not None:
+            tool_names = self._chat_server.get_user_tool_names()
+        tools_csv = ", ".join(tool_names) if tool_names else "none"
+        user_details = [("tools", tools_csv)]
 
-        self._add_message(create_message_widget(MessageType.USER, text, attachments=attachments))
+        user_message = create_message_widget(
+            MessageType.USER,
+            text,
+            attachments=attachments,
+            details=user_details,
+        )
+        user_message.set_details_visible(True)
+        self._add_message(user_message)
         self._add_tools_advertisement()
         receive_widget = create_message_widget(MessageType.ASSISTANT, "")
         receive_widget.start_stream_buffering()
@@ -463,8 +480,19 @@ class ChatColumnWidget(QtWidgets.QWidget):
     def _on_tool_result(self, tool_call: object, result: object) -> None:
         name = getattr(tool_call, "name", "tool")
         response = create_message_widget(MessageType.MCP_RESPONSE, f"{name} result")
-        if isinstance(result, dict) and result:
-            response.set_details([(key, json.dumps(value)) for key, value in result.items()])
+        details: list[tuple[str, str]] = []
+        if isinstance(result, dict):
+            if result:
+                details = [(key, json.dumps(value)) for key, value in result.items()]
+            else:
+                details = [("result", json.dumps(result))]
+        else:
+            try:
+                details = [("result", json.dumps(result))]
+            except Exception:
+                details = [("result", str(result))]
+        if details:
+            response.set_details(details)
             response.set_details_visible(True)
         self._add_message(response)
 

@@ -17,9 +17,11 @@ from Engine.manager_models import (
     _fetch_loaded_model,
     _load_settings,
     _restart_router_with_preset,
+    load_settings_fresh,
     register_model_state_callback,
     load_model,
 )
+from constants import INTERNAL_MCP_HOST, INTERNAL_MCP_NAME, INTERNAL_MCP_PORT
 from Tools.mcp_client_manager import MCPClientManager
 from Tools.tool_executor import ToolExecutor
 from Tools.tool_protocol_base import ToolCall
@@ -43,7 +45,11 @@ class LlamaChatManager:
         self._adapter = select_adapter(self._get_chat_template())
         self._tool_registry = ToolRegistry()
         self._tool_schemas: list[dict] = []
+        self._tool_server_instructions: dict[str, str] = {}
         self._tool_system_added = False
+        self._tool_system_message: dict | None = None
+        self._internal_card_guids: set[str] = set()
+        self._internal_tools_enabled = False
         self._mcp_manager: MCPClientManager | None = None
         self._tool_executor: ToolExecutor | None = None
         self._mcp_load_lock = threading.Lock()
@@ -83,9 +89,14 @@ class LlamaChatManager:
     def register_followup_callback(self, callback: Callable[[], None]) -> None:
         self._followup_callbacks.append(callback)
 
+    def reload_mcp_tools(self) -> None:
+        self._load_mcp_tools_from_settings_async()
+
     def clear_messages(self) -> None:
         with self._lock:
             self._messages.clear()
+        self._internal_card_guids.clear()
+        self._set_internal_drawcard_enabled(False)
 
     def get_last_assistant_message(self) -> str:
         with self._lock:
@@ -108,18 +119,38 @@ class LlamaChatManager:
                 return str(content)
         return ""
 
+    def get_user_tool_names(self) -> list[str]:
+        if not self._tool_schemas and not self._mcp_loading:
+            self._load_mcp_tools_from_settings_async()
+        tool_names: list[str] = []
+        for schema in self._tool_schemas:
+            function = schema.get("function") if isinstance(schema, dict) else None
+            if isinstance(function, dict):
+                name = function.get("name")
+                if name:
+                    tool_names.append(str(name))
+        return tool_names
+
     def send_message(self, text: str, image_paths: Optional[list[Path]] = None) -> None:
         self._logger.info("User: %s", text)
         self._stream_log_buffer = ""
         self._adapter = select_adapter(self._get_chat_template())
-        if not self._tool_schemas:
-            self._load_mcp_tools_from_settings(timeout=1.5)
+        if not self._tool_schemas and not self._mcp_loading:
+            self._load_mcp_tools_from_settings_async()
         if image_paths:
             for path in image_paths:
                 self._logger.info("User attachment: %s", path)
         self._ensure_tool_system_message()
         if self._tool_schemas:
             self._logger.info("Tool schemas attached: %d", len(self._tool_schemas))
+        tool_names: list[str] = []
+        for schema in self._tool_schemas:
+            function = schema.get("function") if isinstance(schema, dict) else None
+            if isinstance(function, dict):
+                name = function.get("name")
+                if name:
+                    tool_names.append(str(name))
+        self._logger.info("User tools included: %s", ", ".join(tool_names) if tool_names else "none")
         content = self._build_content(text, image_paths or [])
         user_message = {"role": "user", "content": content}
         assistant_message = {"role": "assistant", "content": ""}
@@ -258,10 +289,24 @@ class LlamaChatManager:
 
     def get_tools_advertisement(self) -> tuple[str, list[tuple[str, str]]] | None:
         if not self._tool_schemas:
-            self._load_mcp_tools_from_settings(timeout=1.5)
-        if not self._tool_schemas:
+            if not self._mcp_loading:
+                self._load_mcp_tools_from_settings_async()
             return None
         details: list[tuple[str, str]] = []
+        settings = load_settings_fresh()
+        general_preamble = settings.get("tool_preamble_general") or ""
+        cards_preamble = settings.get("tool_preamble_cards") or ""
+        if general_preamble:
+            details.append(("tool_preamble_general", general_preamble))
+        if cards_preamble and any(
+            (schema.get("function") or {}).get("name", "").startswith(f"{INTERNAL_MCP_NAME}.")
+            for schema in self._tool_schemas
+            if isinstance(schema, dict)
+        ):
+            details.append(("tool_preamble_cards", cards_preamble))
+        for server_name, instructions in self._tool_server_instructions.items():
+            if instructions:
+                details.append((f"{server_name}.instructions", instructions))
         for schema in self._tool_schemas:
             function = schema.get("function") if isinstance(schema, dict) else None
             if not isinstance(function, dict):
@@ -329,6 +374,15 @@ class LlamaChatManager:
                 result = executor.execute(call)
             except Exception as exc:
                 result = {"error": str(exc)}
+            if call.name == f"{INTERNAL_MCP_NAME}.CreateCard":
+                guid = None
+                if isinstance(result, str):
+                    guid = result
+                elif isinstance(result, dict):
+                    guid = result.get("guid") or result.get("GUID")
+                if guid and guid not in self._internal_card_guids:
+                    self._internal_card_guids.add(guid)
+                    self._set_internal_drawcard_enabled(True)
             for callback in self._tool_result_callbacks:
                 try:
                     callback(call, result)
@@ -351,17 +405,14 @@ class LlamaChatManager:
             if self._mcp_loading:
                 return
             self._mcp_loading = True
-        settings = _load_settings()
+        settings = load_settings_fresh()
         mcp_settings = settings.get("mcp_settings") or {}
         servers = mcp_settings.get("servers") or {}
-        if not servers:
-            with self._mcp_load_lock:
-                self._mcp_loading = False
-            return
 
         registry = ToolRegistry()
         schemas: list[dict] = []
         tool_map: dict[str, tuple[MCPClientManager, str]] = {}
+        instructions_map: dict[str, str] = {}
 
         default_mcp_folder = Path(__file__).parent.parent / "MCP_Local"
         folder = Path(mcp_settings.get("folder") or default_mcp_folder)
@@ -387,6 +438,9 @@ class LlamaChatManager:
 
             try:
                 tools = manager.list_tools(timeout=timeout)
+                instructions = manager.get_instructions(timeout=timeout)
+                if instructions:
+                    instructions_map[server_name] = instructions
             except Exception as exc:
                 self._logger.warning("Failed to load MCP tools from %s: %s", server_name, exc)
                 continue
@@ -417,12 +471,71 @@ class LlamaChatManager:
                 if enabled:
                     schemas.append(schema)
 
+        internal_url = f"http://{INTERNAL_MCP_HOST}:{INTERNAL_MCP_PORT}/mcp"
+        built_in = settings.get("built_in_mcps", {})
+        if isinstance(built_in, dict):
+            internal_state = built_in.get(INTERNAL_MCP_NAME)
+            if internal_state is None:
+                internal_state = built_in.get("svg_card", {})
+        else:
+            internal_state = {}
+        internal_enabled = bool(internal_state.get("enabled", True))
+        self._internal_tools_enabled = internal_enabled
+        internal_manager: MCPClientManager | None = None
+        internal_tools: list = []
+        if internal_enabled:
+            try:
+                internal_manager = MCPClientManager(internal_url)
+                internal_tools = internal_manager.list_tools(timeout=timeout)
+                instructions = internal_manager.get_instructions(timeout=timeout)
+                if instructions:
+                    instructions_map[INTERNAL_MCP_NAME] = instructions
+            except Exception as exc:
+                self._logger.warning("Failed to load internal MCP tools: %s", exc)
+                internal_tools = []
+
+        for tool in internal_tools:
+            base_name = getattr(tool, "name", None) or tool.get("name")
+            description = getattr(tool, "description", None) or tool.get("description") or ""
+            input_schema = (
+                getattr(tool, "inputSchema", None)
+                or tool.get("inputSchema")
+                or tool.get("parameters")
+                or {"type": "object", "properties": {}}
+            )
+            if not base_name:
+                continue
+            tool_name = f"{INTERNAL_MCP_NAME}.{base_name}"
+            schema = {
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "description": description,
+                    "parameters": input_schema,
+                },
+            }
+            registry.register(
+                ToolDefinition(
+                    name=tool_name,
+                    schema=schema,
+                    source="internal",
+                    enabled=internal_enabled,
+                )
+            )
+            if internal_manager is None:
+                continue
+            tool_map[tool_name] = (internal_manager, base_name)
+            if internal_enabled:
+                schemas.append(schema)
+
         self._mcp_manager = None
         self._tool_registry = registry
         self._tool_schemas = schemas
         self._mcp_tool_map = tool_map
+        self._tool_server_instructions = instructions_map
         self._tool_executor = ToolExecutor(registry, mcp_tool_map=tool_map)
-        self._logger.info("Loaded MCP tools from settings: %d", len(schemas))
+        self._set_internal_drawcard_enabled(bool(self._internal_card_guids))
+        self._logger.info("Loaded MCP tools from settings: %d", len(self._tool_schemas))
         with self._mcp_load_lock:
             self._mcp_loading = False
 
@@ -464,15 +577,62 @@ class LlamaChatManager:
         return "transport=\"http\"" in content or "transport='http'" in content
 
     def _ensure_tool_system_message(self) -> None:
-        if self._tool_system_added or not self._tool_schemas:
+        if not self._tool_schemas:
+            if self._tool_system_message is not None:
+                with self._lock:
+                    if self._tool_system_message in self._messages:
+                        self._messages.remove(self._tool_system_message)
+                self._tool_system_message = None
             return
-        rendered = self._adapter.render_tools(self._tool_schemas, None)
+        settings = load_settings_fresh()
+        general_preamble = settings.get("tool_preamble_general") or ""
+        cards_preamble = settings.get("tool_preamble_cards") or ""
+        instruction_lines = []
+        for server_name, instructions in self._tool_server_instructions.items():
+            if instructions:
+                instruction_lines.append(f"[{server_name}] {instructions}")
+        combined_parts: list[str] = []
+        if general_preamble:
+            combined_parts.append(general_preamble)
+        if cards_preamble and any(
+            (schema.get("function") or {}).get("name", "").startswith(f"{INTERNAL_MCP_NAME}.")
+            for schema in self._tool_schemas
+            if isinstance(schema, dict)
+        ):
+            combined_parts.append(cards_preamble)
+        combined_preamble = "\n\n".join(part for part in combined_parts if part)
+        if instruction_lines:
+            header = "MCP server instructions:"
+            instructions_block = "\n".join([header, *instruction_lines])
+            combined_preamble = (combined_preamble + "\n\n" if combined_preamble else "") + instructions_block
+        rendered = self._adapter.render_tools(self._tool_schemas, combined_preamble)
         if not rendered:
             return
-        system_message = {"role": "system", "content": rendered}
-        with self._lock:
-            self._messages.insert(0, system_message)
+        if self._tool_system_message is None:
+            system_message = {"role": "system", "content": rendered}
+            with self._lock:
+                self._messages.insert(0, system_message)
+            self._tool_system_message = system_message
+        else:
+            with self._lock:
+                self._tool_system_message["content"] = rendered
         self._tool_system_added = True
+
+    def _set_internal_drawcard_enabled(self, enabled: bool) -> None:
+        tool = self._tool_registry.get(f"{INTERNAL_MCP_NAME}.DrawCard")
+        if tool is None:
+            return
+        if not self._internal_tools_enabled:
+            if tool.enabled:
+                tool.enabled = False
+                self._tool_schemas = self._tool_registry.list_tools()
+                self._ensure_tool_system_message()
+            return
+        if tool.enabled:
+            return
+        tool.enabled = True
+        self._tool_schemas = self._tool_registry.list_tools()
+        self._ensure_tool_system_message()
 
     def _get_chat_template(self) -> str | None:
         model_name = _fetch_loaded_model()
