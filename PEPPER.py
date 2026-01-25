@@ -16,7 +16,7 @@ from Engine.logger import configure_logging, get_logger
 from Engine.mcp_internal_server import InternalMcpServer
 from Engine.autorun import run_autorun
 from Engine.interaction_logger import init_interaction_logger
-from Engine.utilities import Utilities
+from Engine.utilities import Utilities, set_model_download_callback
 from UI.column_chat import ChatColumnWidget
 from UI.column_cards import ColumnCardsWidget
 from UI.column_settings import ColumnSettingsWidget
@@ -200,6 +200,8 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
         self._log_file = log_file
         self._cards: Dict[str, SVGCard] = {}
         self._ui_bridge = UiBridge()
+        self._pending_description_thread: Optional[threading.Thread] = None
+        self._pending_description_thread: Optional[threading.Thread] = None
 
         self.setWindowTitle("ChatLlama - SIMPLE")
         self.resize(1200, 800)
@@ -266,6 +268,9 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
         self._add_column("Cards", "#e0e8f7", content_widget=self._cards_container)
 
         self._apply_splitter_sizes()
+        
+        # Register callback for Moondream2 model download messages
+        set_model_download_callback(lambda msg: self.show_status_message(msg, duration_ms=5000))
 
     def _on_model_load_started(self) -> None:
         self._progress.setRange(0, 0)
@@ -310,6 +315,16 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
     def showEvent(self, event: QtGui.QShowEvent) -> None:
         super().showEvent(event)
         QtCore.QTimer.singleShot(0, self._start_mcp_server)
+        # Pre-load Moondream2 model in background thread if autorun is enabled
+        # This ensures the model is ready when we need it for screenshot description at exit
+        if self._exit_idle:
+            QtCore.QTimer.singleShot(100, self._preload_moondream2)
+    
+    def _preload_moondream2(self) -> None:
+        """Pre-load Moondream2 model in background thread for autorun screenshot descriptions."""
+        self._logger.info(
+            "Skipping in-process Moondream2 preload; external snapshot analyzer will be used"
+        )
 
     def _add_column(
         self,
@@ -362,15 +377,53 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
             except Exception as exc:
                 self._logger.exception("Failed to start internal MCP server: %s", exc)
 
-        if self._exit_idle:
-            QtCore.QTimer.singleShot(0, self._exit_if_idle)
+        # Do not auto-exit when autorun is enabled; exit is triggered after autorun completion
 
     def _exit_if_idle(self) -> None:
-        self._logger.info("Exit-idle requested; capturing screenshot and exiting")
-        Utilities.log_screenshot(self._log_file, widget=self)
+        self._logger.info("Exit-idle requested; capturing screenshot and starting description")
+        # Capture screenshot for autorun to let agent see what happened
+        screenshot_path, description_thread = Utilities.log_screenshot(self._log_file, widget=self)
+
+        if description_thread is not None:
+            self._logger.info("Screenshot description thread started; keeping window open until completion")
+            self._pending_description_thread = description_thread
+            QtCore.QTimer.singleShot(200, self._wait_for_description_and_exit)
+            return
+
         app = QtWidgets.QApplication.instance()
         if app:
             app.quit()
+
+    def _wait_for_description_and_exit(self) -> None:
+        thread = self._pending_description_thread
+        if thread is None:
+            app = QtWidgets.QApplication.instance()
+            if app:
+                app.quit()
+            return
+
+        if thread.is_alive():
+            QtCore.QTimer.singleShot(200, self._wait_for_description_and_exit)
+            return
+
+        self._logger.info("Screenshot description finished; exiting now")
+        self._pending_description_thread = None
+        app = QtWidgets.QApplication.instance()
+        if app:
+            app.quit()
+
+    def show_status_message(self, message: str, duration_ms: int = 3000) -> None:
+        """Show a temporary status message (toast-like).
+        
+        Args:
+            message: Message to display
+            duration_ms: How long to show the message (milliseconds)
+        """
+        self._logger.info("Status: %s", message)
+        # Update the model title temporarily to show the message
+        original_text = self._model_title.text()
+        self._model_title.setText(message)
+        QtCore.QTimer.singleShot(duration_ms, lambda: self._model_title.setText(original_text))
 
     def schedule_exit(self, delay_ms: int) -> None:
         self._logger.info("Scheduling exit in %d ms", delay_ms)
@@ -423,7 +476,7 @@ def main() -> None:
 
     app = QtWidgets.QApplication(sys.argv)
     window = ChatLlamaWindow(
-        exit_idle=False,
+        exit_idle=(args.autorun is not None),  # Set exit_idle=True if autorun is requested
         log_file=config.log_file,
         settings_folder=settings_folder,
     )
@@ -431,17 +484,15 @@ def main() -> None:
     def _start_autorun(autorun_args: list[str]) -> None:
         if not autorun_args:
             return
-        QtCore.QTimer.singleShot(0, lambda: window.schedule_exit(60000))
 
         def _finish(success: bool, message: str) -> None:
+            delay_ms = 1000
             if success:
-                logger.info("Autorun completion signaled; scheduling exit")
-                window._invoke_ui(lambda: window.schedule_exit(1000))
+                logger.info("Autorun completion signaled; waiting %d ms then capturing screenshot and exiting", delay_ms)
             else:
-                logger.error(message)
-                app = QtWidgets.QApplication.instance()
-                if app:
-                    app.quit()
+                logger.error("Autorun failed: %s", message)
+            # Always capture screenshot/description before exit so agents can see state
+            window._invoke_ui(lambda: window.schedule_exit(delay_ms))
 
         def _run() -> None:
             def _stage(text: str, image_paths: list[Path]) -> None:
@@ -492,3 +543,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+

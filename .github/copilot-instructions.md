@@ -7,12 +7,28 @@ Automation and tooling
 - The internal MCP server advertises card tools (first card: SVG) and supports external MCP tools over HTTP/stdio.
 - Autorun uses JSON input with explicit message boundaries; avoid silent fallbacks during development.
 	- Single-instance behavior: if ChatLlama is already running, new launches forward the args (including autorun) to the existing instance and then exit.
+	- Run autorun via the CLI: PEPPER.py --autorun <path-to-autorun-json>.
+	- Autorun JSON is an array of messages; each message can include text and optional images.
 	Example:
 	{
 		"messages": [
 			{"text": "...", "images": ["D:/path/to/image.png"]}
 		]
 	}
+	- SVG card autoruns can reference bundled assets with the resource: scheme (e.g., resource:josie.png).
+	- Autorun completes only after any screenshot description finishes; do not assume immediate exit.
+
+Tools guidance (OpenAI-style compatibility)
+- Always persist assistant `tool_calls` metadata in the message history before executing tools.
+- Tool result messages should include `tool_call_id` and `name` fields so results map to the correct call.
+- If the upstream model provides tool-call IDs, propagate them instead of inventing new ones.
+- Avoid tool loops by adding explicit stop instructions (e.g., after `DrawCard` succeeds, reply with a brief confirmation and do not call it again unless the user requests changes).
+- Ensure tool result payloads are JSON-serializable; avoid silent fallbacks that hide tool errors.
+
+File paths and URI conventions
+- Prefer absolute Windows paths for local files (e.g., D:\_GITN\chatllama\pepper_settings\logs\session_*.png).
+- For JSON and Markdown, forward slashes are acceptable and recommended (e.g., D:/path/to/image.png) to avoid escaping backslashes.
+- For SVG images rendered in cards, use resource:filename to refer to assets bundled in the app (e.g., resource:josie.png).
 
 Paths and defaults
 - Default settings folder (dev): D:\_GITN\chatllama\pepper_settings

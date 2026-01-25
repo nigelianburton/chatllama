@@ -205,6 +205,8 @@ class LlamaChatManager:
                             tool_calls = self._extract_tool_calls(payload)
                             if tool_calls:
                                 self._logger.info("Chat response tool calls: %d", len(tool_calls))
+                                with self._lock:
+                                    assistant_message["tool_calls"] = self._build_tool_calls_payload(tool_calls)
                                 self._handle_tool_calls(tool_calls)
                             if message_text:
                                 with self._lock:
@@ -243,6 +245,8 @@ class LlamaChatManager:
                     tool_calls = self._finalize_tool_calls(tool_call_buffer)
                     if tool_calls:
                         self._logger.info("Chat response tool calls: %d", len(tool_calls))
+                        with self._lock:
+                            assistant_message["tool_calls"] = self._build_tool_calls_payload(tool_calls)
                         self._handle_tool_calls(tool_calls)
                     else:
                         self._detect_tool_calls(assistant_message.get("content", ""))
@@ -364,7 +368,7 @@ class LlamaChatManager:
         executor = self._tool_executor
         if executor is None:
             return
-        for call in calls:
+        for index, call in enumerate(calls, start=1):
             for callback in self._tool_call_callbacks:
                 try:
                     callback(call)
@@ -389,7 +393,13 @@ class LlamaChatManager:
                 except Exception:
                     continue
             with self._lock:
-                self._messages.append({"role": "tool", "content": json.dumps(result)})
+                self._messages.append(
+                    {
+                        "role": "tool",
+                        "content": json.dumps(result),
+                        "tool_call_id": f"call_{index}",
+                    }
+                )
         followup_message = {"role": "assistant", "content": ""}
         with self._lock:
             self._messages.append(followup_message)
@@ -672,6 +682,27 @@ class LlamaChatManager:
             return []
         message = (choices[0].get("message") or {})
         return self._parse_tool_calls_list(message.get("tool_calls") or [])
+
+    def _build_tool_calls_payload(self, calls: list[ToolCall]) -> list[dict[str, object]]:
+        tool_calls: list[dict[str, object]] = []
+        for index, call in enumerate(calls, start=1):
+            arguments = call.arguments
+            if not isinstance(arguments, str):
+                try:
+                    arguments = json.dumps(arguments)
+                except Exception:
+                    arguments = "{}"
+            tool_calls.append(
+                {
+                    "id": f"call_{index}",
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": arguments,
+                    },
+                }
+            )
+        return tool_calls
 
     def _accumulate_tool_calls(self, payload: dict, buffer: dict[int, dict[str, str]]) -> None:
         choices = payload.get("choices") or []

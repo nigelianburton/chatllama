@@ -730,12 +730,17 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
                 for name, server_url, toggle_checked in targets:
                     responsive = self._probe_http(server_url)
                     results.append((name, responsive, toggle_checked))
-                QtCore.QMetaObject.invokeMethod(
-                    self,
-                    "_apply_http_probe_results",
-                    QtCore.Qt.ConnectionType.QueuedConnection,
-                    QtCore.Q_ARG(object, results),
-                )
+                try:
+                    QtCore.QMetaObject.invokeMethod(
+                        self,
+                        "_apply_http_probe_results",
+                        QtCore.Qt.ConnectionType.QueuedConnection,
+                        QtCore.Q_ARG(object, results),
+                    )
+                except RuntimeError as exc:
+                    # Widget likely destroyed during app shutdown; ignore to avoid crash.
+                    self._logger.warning("HTTP probe results ignored during shutdown: %s", exc)
+                    return
             finally:
                 with self._mcp_poll_lock:
                     self._mcp_polling = False

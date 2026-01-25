@@ -21,6 +21,7 @@ INTERNAL_MCP_INSTRUCTIONS = (
     "Then pass that exact guid to DrawCard. "
     "DrawCard requires full SVG markup with a <svg> root sized 480x640 (portrait) or 640x480 (landscape). "
     "Never output SVG in assistant messages; only provide svg_instructions inside the DrawCard tool call arguments. "
+    "After DrawCard succeeds, reply with a brief confirmation and do not call DrawCard again unless the user requests changes. "
     "For images, use href values like resource:pic1-portrait.jpg or resource:pic2-landscape.jpg (from the resources folder). "
     "Do not embed base64 images in prompts. Do not call any other tools."
 )
