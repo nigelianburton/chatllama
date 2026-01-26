@@ -51,6 +51,7 @@ File organization
 - UI/: Qt widgets for Settings, Chat, Cards, and subpanels
 - MCP_Internal/: internal MCP tools (SVG card)
 - Tools/: tool protocol adapters, registry, executor, MCP client manager
+- autoruns/: autorun JSON inputs
 - scripts/, testers/, tests/: scripts and validation harnesses
 - pepper_settings/: local settings, caches, and logs
 
@@ -82,8 +83,10 @@ Recent progress
 
 Logs
 - Location: settings_folder\logs (dev default: D:\_GITN\chatllama\pepper_settings\logs)
+- Each run creates a timestamped subfolder named YYYY-MM-DD_HH-MM-SS
+- Log file: session.log (per-session)
 - Interaction log: interaction.json (per-session summary)
-- Session logs: session_YYYY-MM-DD_HH-MM-SS.log and screenshots
+- Autorun artifacts (when enabled): screencap.png, card1.png..cardN.png, description.txt
 
 Todo
 - If the LLM is flagged as being able to view images, MCP responses should include a screen capture of the resulting card.

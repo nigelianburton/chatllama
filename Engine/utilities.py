@@ -188,11 +188,15 @@ def start_moondream_background_load() -> None:
 
 class Utilities:
     @staticmethod
-    def log_screenshot(log_file: Path, widget: Optional[QtWidgets.QWidget] = None) -> tuple[Optional[Path], Optional[threading.Thread]]:
-        """Capture screenshot and start description generation.
-        
+    def log_screenshot(
+        log_file: Path,
+        widget: Optional[QtWidgets.QWidget] = None,
+        card_widgets: Optional[list[QtWidgets.QWidget]] = None,
+    ) -> tuple[Optional[Path], Optional[threading.Thread]]:
+        """Capture screenshot(s) and start description generation.
+
         Returns:
-            Tuple of (screenshot_path, description_thread). The caller should wait for
+            Tuple of (screencap_path, description_thread). The caller should wait for
             the thread to complete before exiting to ensure description generation finishes.
         """
         logger = get_logger("Utilities")
@@ -202,15 +206,9 @@ class Utilities:
                 logger.error("No primary screen available for screenshot")
                 return None, None
 
-            base_name = log_file.stem
             target_dir = log_file.parent
 
-            index = 1
-            while True:
-                candidate = target_dir / f"{base_name} ({index}).png"
-                if not candidate.exists():
-                    break
-                index += 1
+            screencap_path = target_dir / "screencap.png"
 
             window_id = 0
             if widget is not None:
@@ -223,40 +221,60 @@ class Utilities:
                 logger.error("Screenshot capture returned empty pixmap")
                 return None, None
 
-            saved = pixmap.save(str(candidate), "PNG")
+            saved = pixmap.save(str(screencap_path), "PNG")
             if not saved:
-                logger.error("Failed to save screenshot to %s", candidate)
+                logger.error("Failed to save screenshot to %s", screencap_path)
                 return None, None
 
-            logger.info("Screenshot saved: %s", candidate)
+            logger.info("Screenshot saved: %s", screencap_path)
+
+            card_paths: list[Path] = []
+            if card_widgets:
+                for index, card in enumerate(card_widgets, start=1):
+                    try:
+                        card_pixmap = card.grab()
+                    except Exception:
+                        logger.warning("Failed to grab card %d", index)
+                        continue
+                    if card_pixmap.isNull():
+                        logger.warning("Card capture returned empty pixmap for card %d", index)
+                        continue
+                    card_path = target_dir / f"card{index}.png"
+                    if not card_pixmap.save(str(card_path), "PNG"):
+                        logger.warning("Failed to save card %d to %s", index, card_path)
+                        continue
+                    card_paths.append(card_path)
+                    logger.info("Card capture saved: %s", card_path)
             
             # Generate description in background thread (non-daemon so it completes before exit)
             thread = threading.Thread(
                 target=Utilities._generate_screenshot_description,
-                args=(candidate,),
+                args=(screencap_path, card_paths),
                 daemon=False
             )
             thread.start()
             
-            return candidate, thread
+            return screencap_path, thread
         except Exception as exc:  # pragma: no cover
             logger.exception("Screenshot capture failed: %s", exc)
             return None, None
 
     @staticmethod
-    def _generate_screenshot_description(image_path: Path) -> None:
-        """Generate a description of the screenshot and save it as a .txt file."""
+    def _generate_screenshot_description(screencap_path: Path, card_paths: list[Path]) -> None:
+        """Generate descriptions for the screencap and cards and save them as a .txt file."""
         logger = get_logger("Utilities")
-        logger.info("[THREAD START] Screenshot description thread started for: %s", image_path)
+        logger.info("[THREAD START] Screenshot description thread started for: %s", screencap_path)
         try:
-            logger.info("Starting screenshot description generation for: %s", image_path)
+            logger.info("Starting screenshot description generation for: %s", screencap_path)
             
             script_path = Path(__file__).resolve().parent.parent / "lab_describe_snapshot.py"
             if not script_path.exists():
                 logger.error("Snapshot analyzer not found: %s", script_path)
                 return
 
-            cmd = [sys.executable, str(script_path), str(image_path)]
+            cmd = [sys.executable, str(script_path), str(screencap_path)]
+            for path in card_paths:
+                cmd.append(str(path))
             env = os.environ.copy()
             env.setdefault("PYTHONIOENCODING", "utf-8")
             logger.info("Launching snapshot analyzer process: %s", " ".join(cmd))
@@ -269,10 +287,14 @@ class Utilities:
                 logger.error("Snapshot analyzer exited with code %s", result.returncode)
                 return
 
-            description_path = image_path.with_suffix(".txt")
+            description_path = _description_path_from_screencap(screencap_path)
             if description_path.exists():
                 logger.info("Screenshot description saved: %s", description_path)
             else:
                 logger.warning("Snapshot analyzer completed but output not found: %s", description_path)
         except Exception as exc:
             logger.exception("Failed to generate screenshot description: %s", exc)
+
+
+def _description_path_from_screencap(screencap_path: Path) -> Path:
+    return screencap_path.with_name("description.txt")

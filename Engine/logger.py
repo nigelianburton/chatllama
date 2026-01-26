@@ -146,7 +146,9 @@ def configure_logging(settings_folder: Path) -> LogConfig:
     logs_dir = settings_folder / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    log_file = logs_dir / f"session_{timestamp}.log"
+    session_dir = logs_dir / timestamp
+    session_dir.mkdir(parents=True, exist_ok=True)
+    log_file = session_dir / "session.log"
 
     _ensure_utf8_console()
 

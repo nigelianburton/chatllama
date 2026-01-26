@@ -18,6 +18,7 @@ chatllama.log
 
 # Settings (keep template, ignore user settings)
 config/settings.yml
+pepper_settings/
 
 # IDE
 .vscode/

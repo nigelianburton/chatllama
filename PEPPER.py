@@ -382,7 +382,11 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
     def _exit_if_idle(self) -> None:
         self._logger.info("Exit-idle requested; capturing screenshot and starting description")
         # Capture screenshot for autorun to let agent see what happened
-        screenshot_path, description_thread = Utilities.log_screenshot(self._log_file, widget=self)
+        screenshot_path, description_thread = Utilities.log_screenshot(
+            self._log_file,
+            widget=self,
+            card_widgets=list(self._cards.values()),
+        )
 
         if description_thread is not None:
             self._logger.info("Screenshot description thread started; keeping window open until completion")

@@ -1,0 +1,7 @@
+{
+  "messages": [
+    {
+      "text": "Create a new SVG card in portrait orientation with a similar layout to the previous example: a large image at the top, a clean caption panel below with a title, subtitle, and a couple of smaller footer lines, and a thin divider line. Use a light neutral background and a white content panel. Use an image from the resources folder (resource:...). Call internal.CreateCard first to get a guid, then internal.DrawCard with the full SVG document. Do not include any raw SVG in your assistant message; only include it inside the DrawCard tool call. After DrawCard succeeds, reply with a brief confirmation."
+    }
+  ]
+}

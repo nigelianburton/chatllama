@@ -25,38 +25,41 @@ except ImportError as e:
     print(f"ERROR: transformers not available: {e}")
     sys.exit(1)
 
-# Get screenshot path
-if len(sys.argv) < 2:
-    # Use most recent screenshot from logs folder
+# Get screencap + card paths
+provided_paths = [Path(p) for p in sys.argv[1:]]
+if not provided_paths:
     logs_folder = Path(r"D:\_GITN\chatllama\pepper_settings\logs")
-    screenshots = sorted(logs_folder.glob("session_*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if screenshots:
-        screenshot_path = str(screenshots[0])
-        print(f"\n[2/5] No argument provided, using most recent screenshot:")
-        print(f"      {screenshot_path}")
+    screencaps = sorted(logs_folder.glob("*/screencap.png"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if screencaps:
+        provided_paths = [screencaps[0]]
+        print("\n[2/5] No argument provided, using most recent screencap:")
+        print(f"      {provided_paths[0]}")
     else:
-        print("\n✗ No screenshot found in logs folder and no argument provided")
-        print("Usage: python lab_describe_snapshot.py <path_to_screenshot.png>")
-        sys.exit(1)
+        screenshots = sorted(logs_folder.glob("session_*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if screenshots:
+            provided_paths = [screenshots[0]]
+            print("\n[2/5] No argument provided, using most recent screenshot:")
+            print(f"      {provided_paths[0]}")
+        else:
+            print("\n✗ No screenshot found in logs folder and no argument provided")
+            print("Usage: python lab_describe_snapshot.py <path_to_screencap.png> [card1.png ... cardN.png]")
+            sys.exit(1)
 else:
-    screenshot_path = sys.argv[1]
-    print(f"\n[2/5] Using provided screenshot:")
-    print(f"      {screenshot_path}")
+    print("\n[2/5] Using provided images:")
+    for item in provided_paths:
+        print(f"      {item}")
 
-# Verify file exists
-if not Path(screenshot_path).exists():
-    print(f"✗ File not found: {screenshot_path}")
-    sys.exit(1)
-print(f"OK: File exists ({Path(screenshot_path).stat().st_size:,} bytes)")
+screencap_path = provided_paths[0]
+card_paths = provided_paths[1:]
 
-# Load image
-print("\n[3/5] Loading image with PIL...")
-try:
-    image = Image.open(screenshot_path)
-    print(f"OK: Image loaded: {image.size[0]}x{image.size[1]} pixels, mode={image.mode}")
-except Exception as e:
-    print(f"ERROR: Failed to load image: {e}")
+# Verify files exist
+missing = [path for path in provided_paths if not path.exists()]
+if missing:
+    print("✗ File(s) not found:")
+    for path in missing:
+        print(f"   {path}")
     sys.exit(1)
+print(f"OK: Files found ({len(provided_paths)} total)")
 
 # Load Moondream model
 MODEL_ID = "vikhyatk/moondream2"
@@ -99,31 +102,41 @@ while not load_done.wait(timeout=1.0):
 if load_error is not None or model is None or tokenizer is None:
     sys.exit(1)
 
-# Generate description
-print("\n[5/5] Generating description...")
-question = "Describe this user interface layout in detail. What are the main sections, content areas, and any layout features you notice?"
+def _describe_image(image_path: Path, prompt: str) -> str:
+    image = Image.open(image_path)
+    start_time = time.time()
+    answer = model.answer_question(image, prompt, tokenizer)
+    elapsed = time.time() - start_time
+    print(f"OK: Description generated for {image_path.name} in {elapsed:.1f}s")
+    return answer
+
+
+def _description_path_from_screencap(path: Path) -> Path:
+    return path.with_name("description.txt")
+
+
+print("\n[5/5] Generating descriptions...")
+screen_question = "Describe this user interface layout in detail. What are the main sections, content areas, and any layout features you notice?"
+card_question = "Describe this card in detail. Mention imagery, layout, text, and colors."
+
+sections: list[str] = []
 
 try:
-    start_time = time.time()
-    answer = model.answer_question(image, question, tokenizer)
-    elapsed = time.time() - start_time
-    print(f"OK: Description generated in {elapsed:.1f}s")
+    answer = _describe_image(screencap_path, screen_question)
+    sections.append("Screen Capture")
+    sections.append(f"Question: {screen_question}\n\nAnswer:\n{answer}")
+
+    for index, card_path in enumerate(card_paths, start=1):
+        card_answer = _describe_image(card_path, card_question)
+        sections.append(f"Card {index}")
+        sections.append(f"Question: {card_question}\n\nAnswer:\n{card_answer}")
 except Exception as e:
     print(f"ERROR: Failed to generate description: {e}")
     sys.exit(1)
 
-# Display results
-print("\n" + "=" * 70)
-print("RESULT")
-print("=" * 70)
-print(f"\nQuestion: {question}")
-print(f"\nAnswer:\n{answer}")
-print("\n" + "=" * 70)
-
-# Save to file
-output_path = Path(screenshot_path).with_suffix(".txt")
+output_path = _description_path_from_screencap(screencap_path)
 try:
-    output_path.write_text(f"Question: {question}\n\nAnswer:\n{answer}\n", encoding="utf-8")
+    output_path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
     print(f"\nOK: Description saved to: {output_path}")
 except Exception as e:
     print(f"\nWARN: Could not save description file: {e}")
