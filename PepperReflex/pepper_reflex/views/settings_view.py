@@ -80,6 +80,7 @@ def settings_view() -> rx.Component:
                                                 ),
                                                 on_click=lambda: SettingsState.toggle_tool_enabled(item["name"]),
                                                 size="1",
+                                                color_scheme=rx.cond(item["enabled"], "green", "red"),
                                             ),
                                             rx.text(
                                                 item["name"],
