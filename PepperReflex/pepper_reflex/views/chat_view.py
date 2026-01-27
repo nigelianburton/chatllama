@@ -19,36 +19,36 @@ def chat_view() -> rx.Component:
             rx.text("Chat", font_weight="bold", color=TEXT_PRIMARY),
             **COLUMN_HEADER_STYLE,
         ),
-        rx.box(
-            rx.scroll_area(
-                rx.vstack(
-                    rx.foreach(
-                        ChatState.messages,
-                        lambda msg: chat_bubble(msg["role"], msg["text"]),
-                    ),
-                    spacing="2",
-                    width="100%",
-                    padding="8px",
+        rx.scroll_area(
+            rx.vstack(
+                rx.foreach(
+                    ChatState.messages,
+                    lambda msg: chat_bubble(msg["role"], msg["text"]),
                 ),
-                type="auto",
+                rx.hstack(
+                    rx.text_area(
+                        placeholder="Type a message...",
+                        value=ChatState.input_text,
+                        on_change=ChatState.set_input_text,
+                        **CHAT_TEXTAREA_STYLE,
+                    ),
+                    rx.button(
+                        "Send",
+                        on_click=ChatState.send_message,
+                        size="2",
+                        **SEND_BUTTON_STYLE,
+                    ),
+                    **CHAT_INPUT_ROW,
+                ),
+                spacing="2",
+                width="100%",
                 height="100%",
+                padding="8px",
+                align_items="stretch",
             ),
+            height="100%",
+            scrollbars="vertical",
             **CHAT_SCROLL_STYLE,
-        ),
-        rx.hstack(
-            rx.text_area(
-                placeholder="Type a message...",
-                value=ChatState.input_text,
-                on_change=ChatState.set_input_text,
-                **CHAT_TEXTAREA_STYLE,
-            ),
-            rx.button(
-                "Send",
-                on_click=ChatState.send_message,
-                size="2",
-                **SEND_BUTTON_STYLE,
-            ),
-            **CHAT_INPUT_ROW,
         ),
         spacing="0",
         **COLUMN_CONTAINER,

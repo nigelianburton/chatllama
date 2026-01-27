@@ -113,7 +113,8 @@ CHAT_TEXTAREA_STYLE = {
     "width": "90%",
     "height": "70px",
     "background_color": SURFACE,
-    "color": TEXT_PRIMARY,
+    "color": "white",
+    "placeholder_color": "#909296",
     "border": f"1px solid {SECTION_BORDER}",
     "focus_border_color": ACCENT_BLUE,
     "font_family": FONT_SANS,
@@ -134,7 +135,6 @@ COLUMN_CONTAINER = {
     "height": "100%",
     "width": "100%",
     "overflow_y": "auto",
-    "align_items": "stretch",
 }
 
 CARDS_CONTAINER_STYLE = {
@@ -145,7 +145,11 @@ CARD_STYLE = {
     "width": "100%",
     "height": "240px",
     "padding": "20px",
-    "background_color": SURFACE,
-    "border": f"1px solid {SECTION_BORDER}",
+    "background_color": "#ffffff",
+    "border": "1px solid #999",
     "border_radius": "8px",
 }
+
+CARD_TEXT_COLOR = "#111111"
+
+MODEL_READY_COLOR = "#1c7c1c"

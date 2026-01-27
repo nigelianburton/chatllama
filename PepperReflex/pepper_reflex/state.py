@@ -108,12 +108,40 @@ class BaseState(rx.State):
 
 
 class SettingsState(BaseState):
-    sections: List[Dict[str, str]] = [
-        {"title": "Models", "body": "Model selection, GPU offload, context size."},
-        {"title": "MCP Tools", "body": "Enable internal tools and external MCP servers."},
-        {"title": "Autorun", "body": "Run scripted prompts and capture screenshots."},
-        {"title": "Logging", "body": "Session logs, interaction JSON, and diagnostics."},
+    model_options: List[str] = [
+        "Qwen3-VL-8B",
+        "Llama-3.2-11B",
+        "Phi-4-Mini",
     ]
+    selected_model: str = "Qwen3-VL-8B"
+    model_ready: bool = True
+
+    mcp_items: List[Dict[str, str]] = [
+        {
+            "name": "internal",
+            "enabled": "true",
+            "transport": "stdio",
+            "url": "",
+            "port": "",
+        },
+        {
+            "name": "fashion_http",
+            "enabled": "false",
+            "transport": "http",
+            "url": "http://localhost",
+            "port": "8014",
+        },
+    ]
+
+    def set_selected_model(self, value: str) -> None:
+        self.selected_model = value
+        self.model_ready = False
+
+    def load_model(self) -> None:
+        self.model_ready = True
+
+    def delete_mcp(self) -> None:
+        return None
 
 
 class ChatState(BaseState):

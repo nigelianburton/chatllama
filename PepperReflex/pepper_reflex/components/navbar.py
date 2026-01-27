@@ -30,8 +30,8 @@ def navbar() -> rx.Component:
         rx.hstack(
             rx.progress(
                 value=BaseState.progress_value,
-                width="140px",
-                display=rx.cond(BaseState.progress_value > 0, "block", "none"),
+                width="150px",
+                visibility=rx.cond(BaseState.progress_value > 0, "visible", "hidden"),
             ),
             rx.text(
                 BaseState.status_text,
