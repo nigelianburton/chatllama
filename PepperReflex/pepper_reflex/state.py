@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, TypedDict
 
 import reflex as rx
 
@@ -107,6 +107,12 @@ class BaseState(rx.State):
         return self.progress
 
 
+class BuiltInMcpItem(TypedDict):
+    name: str
+    enabled: bool
+    methods: List[str]
+
+
 class SettingsState(BaseState):
     model_options: List[str] = [
         "Qwen3-VL-8B",
@@ -130,6 +136,19 @@ class SettingsState(BaseState):
             "transport": "http",
             "url": "http://localhost",
             "port": "8014",
+        },
+    ]
+
+    built_in_mcps: List[BuiltInMcpItem] = [
+        {
+            "name": "svg_card",
+            "enabled": True,
+            "methods": ["CreateCard", "DrawCard", "DeleteCard"],
+        },
+        {
+            "name": "mcp_card_textviewer",
+            "enabled": True,
+            "methods": ["CreateCard", "DrawCard"],
         },
     ]
 

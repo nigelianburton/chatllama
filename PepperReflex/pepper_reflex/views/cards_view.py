@@ -36,6 +36,7 @@ def cards_view() -> rx.Component:
             ),
             height="100%",
             scrollbars="vertical",
+            flex="1",
         ),
         spacing="0",
         **COLUMN_CONTAINER,

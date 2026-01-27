@@ -123,6 +123,57 @@ def settings_view() -> rx.Component:
                     rx.accordion.item(
                         rx.accordion.header(
                             rx.accordion.trigger(
+                                "Built-in MCPs",
+                                **ACCORDION_TRIGGER_STYLE,
+                            ),
+                        ),
+                        rx.accordion.content(
+                            rx.vstack(
+                                rx.foreach(
+                                    SettingsState.built_in_mcps,
+                                    lambda item: rx.vstack(
+                                        rx.hstack(
+                                            rx.text(
+                                                rx.cond(item["enabled"], "✓", "✗"),
+                                                color=rx.cond(
+                                                    item["enabled"],
+                                                    "#1c7c1c",
+                                                    "#d9480f",
+                                                ),
+                                                font_weight="bold",
+                                            ),
+                                            rx.text(item["name"], font_weight="bold"),
+                                            spacing="2",
+                                            width="100%",
+                                        ),
+                                        rx.hstack(
+                                            rx.foreach(
+                                                item["methods"],
+                                                lambda method: rx.box(
+                                                    rx.text(method, font_size="0.8rem"),
+                                                    padding="2px 6px",
+                                                    border="1px solid #999",
+                                                    background_color="#1f2329",
+                                                    border_radius="4px",
+                                                ),
+                                            ),
+                                            spacing="2",
+                                            wrap="wrap",
+                                        ),
+                                        spacing="2",
+                                        width="100%",
+                                    ),
+                                ),
+                                spacing="3",
+                                width="100%",
+                            )
+                        ),
+                        value="built-in-mcps",
+                        **ACCORDION_ITEM_STYLE,
+                    ),
+                    rx.accordion.item(
+                        rx.accordion.header(
+                            rx.accordion.trigger(
                                 "Autorun",
                                 **ACCORDION_TRIGGER_STYLE,
                             ),
@@ -161,6 +212,7 @@ def settings_view() -> rx.Component:
             ),
             height="100%",
             scrollbars="vertical",
+            flex="1",
         ),
         spacing="0",
         **COLUMN_CONTAINER,

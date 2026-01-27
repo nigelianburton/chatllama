@@ -94,7 +94,6 @@ ACCORDION_TRIGGER_STYLE = {
 
 # Chat Input Area (The 90/10 Split)
 CHAT_SCROLL_STYLE = {
-    "flex": "1",
     "width": "100%",
     "overflow": "hidden",
 }

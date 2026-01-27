@@ -48,6 +48,7 @@ def chat_view() -> rx.Component:
             ),
             height="100%",
             scrollbars="vertical",
+            flex="1",
             **CHAT_SCROLL_STYLE,
         ),
         spacing="0",
