@@ -27,12 +27,11 @@ def navbar() -> rx.Component:
             color=TEXT_PRIMARY,
         ),
         rx.spacer(),
+        rx.progress(
+            value=BaseState.progress_value,
+            width="150px",
+        ),
         rx.hstack(
-            rx.progress(
-                value=BaseState.progress_value,
-                width="150px",
-                visibility=rx.cond(BaseState.progress_value > 0, "visible", "hidden"),
-            ),
             rx.text(
                 BaseState.status_text,
                 font_size="0.8rem",

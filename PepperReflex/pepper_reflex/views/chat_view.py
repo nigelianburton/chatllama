@@ -19,7 +19,7 @@ def chat_view() -> rx.Component:
             rx.text("Chat", font_weight="bold", color=TEXT_PRIMARY),
             **COLUMN_HEADER_STYLE,
         ),
-        rx.scroll_area(
+        rx.box(
             rx.vstack(
                 rx.foreach(
                     ChatState.messages,
@@ -30,6 +30,7 @@ def chat_view() -> rx.Component:
                         placeholder="Type a message...",
                         value=ChatState.input_text,
                         on_change=ChatState.set_input_text,
+                        color="white",
                         **CHAT_TEXTAREA_STYLE,
                     ),
                     rx.button(
@@ -46,11 +47,12 @@ def chat_view() -> rx.Component:
                 padding="8px",
                 align_items="stretch",
             ),
-            height="100%",
-            scrollbars="vertical",
+            overflow_y="auto",
             flex="1",
+            width="100%",
             **CHAT_SCROLL_STYLE,
         ),
         spacing="0",
-        **COLUMN_CONTAINER,
+        height="100%",
+        flex="1",
     )

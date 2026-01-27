@@ -94,7 +94,6 @@ ACCORDION_TRIGGER_STYLE = {
 
 # Chat Input Area (The 90/10 Split)
 CHAT_SCROLL_STYLE = {
-    "width": "100%",
     "overflow": "hidden",
 }
 
@@ -111,8 +110,7 @@ CHAT_INPUT_ROW = {
 CHAT_TEXTAREA_STYLE = {
     "width": "90%",
     "height": "70px",
-    "background_color": SURFACE,
-    "color": "white",
+    "background_color": "#25262b !important",
     "placeholder_color": "#909296",
     "border": f"1px solid {SECTION_BORDER}",
     "focus_border_color": ACCENT_BLUE,

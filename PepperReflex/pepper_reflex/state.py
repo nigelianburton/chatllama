@@ -113,6 +113,14 @@ class BuiltInMcpItem(TypedDict):
     methods: List[str]
 
 
+class McpItem(TypedDict):
+    name: str
+    enabled: bool
+    transport: str
+    url: str
+    port: str
+
+
 class SettingsState(BaseState):
     model_options: List[str] = [
         "Qwen3-VL-8B",
@@ -122,17 +130,17 @@ class SettingsState(BaseState):
     selected_model: str = "Qwen3-VL-8B"
     model_ready: bool = True
 
-    mcp_items: List[Dict[str, str]] = [
+    mcp_items: List[McpItem] = [
         {
             "name": "internal",
-            "enabled": "true",
+            "enabled": True,
             "transport": "stdio",
             "url": "",
             "port": "",
         },
         {
             "name": "fashion_http",
-            "enabled": "false",
+            "enabled": False,
             "transport": "http",
             "url": "http://localhost",
             "port": "8014",
@@ -161,6 +169,15 @@ class SettingsState(BaseState):
 
     def delete_mcp(self) -> None:
         return None
+
+    def toggle_mcp(self, name: str) -> None:
+        updated = []
+        for item in self.mcp_items:
+            if item.get("name") == name:
+                updated.append({**item, "enabled": not bool(item.get("enabled"))})
+            else:
+                updated.append(item)
+        self.mcp_items = updated
 
 
 class ChatState(BaseState):

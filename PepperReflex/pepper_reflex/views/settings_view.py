@@ -19,7 +19,7 @@ def settings_view() -> rx.Component:
             rx.text("Settings", font_weight="bold"),
             **COLUMN_HEADER_STYLE,
         ),
-        rx.scroll_area(
+        rx.box(
             rx.box(
                 rx.accordion.root(
                     rx.accordion.item(
@@ -72,20 +72,15 @@ def settings_view() -> rx.Component:
                                     SettingsState.mcp_items,
                                     lambda item: rx.vstack(
                                         rx.hstack(
+                                            rx.button(
+                                                rx.cond(item["enabled"], "✓", "✗"),
+                                                on_click=SettingsState.toggle_mcp(item["name"]),
+                                                size="1",
+                                            ),
                                             rx.text(
-                                                rx.cond(
-                                                    item["enabled"] == "true",
-                                                    "✓",
-                                                    "✗",
-                                                ),
-                                                color=rx.cond(
-                                                    item["enabled"] == "true",
-                                                    "#1c7c1c",
-                                                    "#d9480f",
-                                                ),
+                                                item["name"],
                                                 font_weight="bold",
                                             ),
-                                            rx.text(item["name"], font_weight="bold"),
                                             rx.spacer(),
                                             rx.button("✕", on_click=SettingsState.delete_mcp),
                                             spacing="2",
@@ -210,11 +205,11 @@ def settings_view() -> rx.Component:
                 ),
                 **SETTINGS_PANEL_STYLE,
             ),
-            height="100%",
-            scrollbars="vertical",
+            overflow_y="auto",
             flex="1",
+            width="100%",
         ),
         spacing="0",
-        **COLUMN_CONTAINER,
-        align_items="stretch",
+        height="100%",
+        flex="1",
     )

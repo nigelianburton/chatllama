@@ -16,7 +16,7 @@ def cards_view() -> rx.Component:
             rx.text("Cards", font_weight="bold"),
             **COLUMN_HEADER_STYLE,
         ),
-        rx.scroll_area(
+        rx.box(
             rx.vstack(
                 rx.foreach(
                     CardsState.cards,
@@ -34,11 +34,12 @@ def cards_view() -> rx.Component:
                 padding="12px",
                 width="100%",
             ),
-            height="100%",
-            scrollbars="vertical",
+            overflow_y="auto",
             flex="1",
+            width="100%",
         ),
         spacing="0",
-        **COLUMN_CONTAINER,
+        height="100%",
+        flex="1",
         **CARDS_CONTAINER_STYLE,
     )

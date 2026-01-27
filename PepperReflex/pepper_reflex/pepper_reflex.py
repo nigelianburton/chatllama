@@ -10,12 +10,17 @@ from pepper_reflex.views.settings_view import settings_view
 
 def index() -> rx.Component:
     return rx.theme(
-        rx.vstack(
+        rx.flex(
             navbar(),
-            rx.flex(
+            rx.hstack(
                 rx.cond(
                     BaseState.show_settings,
                     rx.box(settings_view(), flex="1", height="100%"),
+                    rx.fragment(),
+                ),
+                rx.cond(
+                    BaseState.show_settings & BaseState.show_chat,
+                    rx.box(width="4px", background_color="#373a40", cursor="col-resize"),
                     rx.fragment(),
                 ),
                 rx.cond(
@@ -24,21 +29,25 @@ def index() -> rx.Component:
                     rx.fragment(),
                 ),
                 rx.cond(
+                    BaseState.show_chat & BaseState.show_cards,
+                    rx.box(width="4px", background_color="#373a40", cursor="col-resize"),
+                    rx.fragment(),
+                ),
+                rx.cond(
                     BaseState.show_cards,
                     rx.box(cards_view(), flex="1", height="100%"),
                     rx.fragment(),
                 ),
                 align_items="stretch",
-                gap="8px",
-                padding="8px",
-                width="100%",
-                height="100vh",
-                max_height="100vh",
+                height="100%",
                 overflow="hidden",
+                width="100%",
             ),
+            direction="column",
             height="100vh",
+            max_height="100vh",
+            overflow="hidden",
             width="100%",
-            spacing="0",
             background_color=BACKGROUND,
         ),
         appearance="dark",
