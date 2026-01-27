@@ -68,6 +68,7 @@ SETTINGS_PANEL_STYLE = {
     "border_radius": "8px",
     "margin": "8px",
     "background_color": SURFACE,
+    "overflow": "auto",
 }
 
 ACCORDION_ROOT_STYLE = {
@@ -79,7 +80,7 @@ ACCORDION_ITEM_STYLE = {
     "background_color": SURFACE,
     "margin_bottom": "8px",
     "border_radius": "8px",
-    "overflow": "hidden",
+    "padding_bottom": "2em",
     "width": "100%",
 }
 

@@ -1,6 +1,6 @@
 import reflex as rx
 
-from pepper_reflex.state import SettingsState
+from pepper_reflex.state import BaseState, SettingsState
 from pepper_reflex.styles import (
     ACCORDION_ROOT_STYLE,
     ACCORDION_TRIGGER_STYLE,
@@ -33,7 +33,7 @@ def settings_view() -> rx.Component:
                             rx.vstack(
                                 rx.text(
                                     "Model: ",
-                                    SettingsState.selected_model,
+                                    BaseState.selected_model,
                                     color=rx.cond(
                                         SettingsState.model_ready,
                                         MODEL_READY_COLOR,
@@ -43,18 +43,29 @@ def settings_view() -> rx.Component:
                                 ),
                                 rx.hstack(
                                     rx.select(
-                                        SettingsState.model_options,
-                                        value=SettingsState.selected_model,
-                                        on_change=SettingsState.set_selected_model,
-                                        width="100%",
+                                        BaseState.model_options,
+                                        placeholder="Select a model",
+                                        value=BaseState.selected_model,
+                                        on_change=BaseState.set_selected_model,
+                                        flex="1",
                                     ),
-                                    rx.button("Load", on_click=SettingsState.load_model),
-                                    spacing="2",
+                                    rx.button(
+                                        "Load",
+                                        on_click=BaseState.load_model,
+                                        size="2",
+                                        variant="solid",
+                                        color_scheme="blue",
+                                        width="auto",
+                                    ),
                                     width="100%",
+                                    align="center",
+                                    padding_y="1em",
                                 ),
                                 spacing="3",
                                 width="100%",
-                            )
+                            ),
+                            height="auto",
+                            overflow="visible",
                         ),
                         value="models",
                         **ACCORDION_ITEM_STYLE,

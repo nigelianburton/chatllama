@@ -74,4 +74,4 @@ def index() -> rx.Component:
 
 
 app = rx.App(style={"font_family": FONT_SANS})
-app.add_page(index, route="/")
+app.add_page(index, route="/", on_load=BaseState.poll_control_service)
