@@ -27,17 +27,17 @@ def navbar() -> rx.Component:
             color=TEXT_PRIMARY,
         ),
         rx.spacer(),
-        rx.progress(
-            value=BaseState.progress_value,
-            width="150px",
-            color_scheme="teal",
-            position="relative",
-        ),
         rx.hstack(
             rx.text(
                 BaseState.status_text,
                 font_size="0.8rem",
                 color=TEXT_MUTED,
+            ),
+            rx.progress(
+                value=BaseState.progress_value,
+                width="150px",
+                color_scheme="teal",
+                position="relative",
             ),
             rx.button(
                 "Settings",

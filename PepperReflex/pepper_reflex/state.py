@@ -198,6 +198,15 @@ class SettingsState(BaseState):
                 updated.append(item)
         self.mcp_items = updated
 
+    def toggle_built_in_mcp(self, name: str) -> None:
+        updated = []
+        for item in self.built_in_mcps:
+            if item.get("name") == name:
+                updated.append({**item, "enabled": not bool(item.get("enabled"))})
+            else:
+                updated.append(item)
+        self.built_in_mcps = updated
+
 
 class ChatState(BaseState):
     input_text: str = ""

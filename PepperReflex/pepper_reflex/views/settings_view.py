@@ -129,14 +129,11 @@ def settings_view() -> rx.Component:
                                     SettingsState.built_in_mcps,
                                     lambda item: rx.vstack(
                                         rx.hstack(
-                                            rx.text(
+                                            rx.button(
                                                 rx.cond(item["enabled"], "✓", "✗"),
-                                                color=rx.cond(
-                                                    item["enabled"],
-                                                    "#1c7c1c",
-                                                    "#d9480f",
-                                                ),
-                                                font_weight="bold",
+                                                on_click=SettingsState.toggle_built_in_mcp(item["name"]),
+                                                size="1",
+                                                color_scheme=rx.cond(item["enabled"], "green", "red"),
                                             ),
                                             rx.text(item["name"], font_weight="bold"),
                                             spacing="2",

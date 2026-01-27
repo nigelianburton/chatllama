@@ -1,4 +1,5 @@
 import reflex as rx
+import reflex_resizable_panels as resizable
 
 from pepper_reflex.components.navbar import navbar
 from pepper_reflex.state import BaseState
@@ -13,10 +14,8 @@ def index() -> rx.Component:
         rx.flex(
             rx.el.style(
                 """
-                textarea.rt-TextAreaInput,
-                .rt-TextAreaRoot textarea,
-                textarea {
-                    color: white !important;
+                .rt-TextAreaInput, .rt-TextAreaRoot textarea, textarea {
+                    color: #ffffff !important;
                     -webkit-text-fill-color: #ffffff !important;
                     background-color: #25262b !important;
                 }
@@ -29,26 +28,39 @@ def index() -> rx.Component:
                 """
             ),
             navbar(),
-            rx.hstack(
-                rx.cond(
-                    BaseState.show_settings,
-                    rx.box(settings_view(), flex="1", height="100%"),
-                    rx.fragment(),
+            resizable.PanelGroup.create(
+                resizable.Panel.create(
+                    rx.cond(BaseState.show_settings, settings_view(), rx.fragment()),
+                    id="settings",
+                    order=1,
+                    min_size=rx.cond(BaseState.show_settings, 15, 0),
+                    default_size=25,
                 ),
-                rx.cond(
-                    BaseState.show_chat,
-                    rx.box(chat_view(), flex="1", height="100%"),
-                    rx.fragment(),
+                resizable.PanelResizeHandle.create(width="4px", background_color="#373a40"),
+                resizable.Panel.create(
+                    resizable.PanelGroup.create(
+                        resizable.Panel.create(
+                            rx.cond(BaseState.show_chat, chat_view(), rx.fragment()),
+                            id="chat",
+                            order=1,
+                            min_size=rx.cond(BaseState.show_chat, 20, 0),
+                            default_size=50,
+                        ),
+                        resizable.PanelResizeHandle.create(width="4px", background_color="#373a40"),
+                        resizable.Panel.create(
+                            rx.cond(BaseState.show_cards, cards_view(), rx.fragment()),
+                            id="cards",
+                            order=2,
+                            min_size=rx.cond(BaseState.show_cards, 15, 0),
+                            default_size=25,
+                        ),
+                        direction="horizontal",
+                    ),
+                    id="main-content",
+                    order=2,
                 ),
-                rx.cond(
-                    BaseState.show_cards,
-                    rx.box(cards_view(), flex="1", height="100%"),
-                    rx.fragment(),
-                ),
+                direction="horizontal",
                 height="100%",
-                width="100%",
-                align_items="stretch",
-                overflow="hidden",
             ),
             direction="column",
             height="100vh",
