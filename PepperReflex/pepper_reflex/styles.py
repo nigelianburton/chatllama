@@ -70,12 +70,17 @@ SETTINGS_PANEL_STYLE = {
     "background_color": SURFACE,
 }
 
+ACCORDION_ROOT_STYLE = {
+    "width": "100%",
+}
+
 ACCORDION_ITEM_STYLE = {
     "border": f"1px solid {SECTION_BORDER}",
     "background_color": SURFACE,
     "margin_bottom": "8px",
     "border_radius": "8px",
     "overflow": "hidden",
+    "width": "100%",
 }
 
 ACCORDION_TRIGGER_STYLE = {
@@ -101,6 +106,7 @@ CHAT_INPUT_ROW = {
     "width": "100%",
     "align": "center",
     "spacing": "2",
+    "margin_top": "auto",
 }
 
 CHAT_TEXTAREA_STYLE = {
@@ -115,6 +121,7 @@ CHAT_TEXTAREA_STYLE = {
 }
 
 SEND_BUTTON_STYLE = {
+    "width": "10%",
     "height": "70px",
     "background_color": ACCENT_BLUE,
     "color": BACKGROUND,
@@ -126,6 +133,8 @@ SEND_BUTTON_STYLE = {
 COLUMN_CONTAINER = {
     "height": "100%",
     "width": "100%",
+    "overflow_y": "auto",
+    "align_items": "stretch",
 }
 
 CARDS_CONTAINER_STYLE = {

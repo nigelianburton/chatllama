@@ -3,6 +3,7 @@ import reflex as rx
 from pepper_reflex.components.settings_item import settings_item
 from pepper_reflex.state import SettingsState
 from pepper_reflex.styles import (
+    ACCORDION_ROOT_STYLE,
     ACCORDION_TRIGGER_STYLE,
     ACCORDION_ITEM_STYLE,
     COLUMN_CONTAINER,
@@ -38,7 +39,7 @@ def settings_view() -> rx.Component:
                 type="multiple",
                 collapsible=True,
                 variant="soft",
-                width="100%",
+                **ACCORDION_ROOT_STYLE,
             ),
             **SETTINGS_PANEL_STYLE,
         ),

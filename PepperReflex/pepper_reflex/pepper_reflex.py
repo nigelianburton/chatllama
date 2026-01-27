@@ -9,34 +9,39 @@ from pepper_reflex.views.settings_view import settings_view
 
 
 def index() -> rx.Component:
-    return rx.vstack(
-        navbar(),
-        rx.flex(
-            rx.cond(
-                BaseState.show_settings,
-                rx.box(settings_view(), flex="1", height="100%"),
-                rx.fragment(),
+    return rx.theme(
+        rx.vstack(
+            navbar(),
+            rx.flex(
+                rx.cond(
+                    BaseState.show_settings,
+                    rx.box(settings_view(), flex="1", height="100%"),
+                    rx.fragment(),
+                ),
+                rx.cond(
+                    BaseState.show_chat,
+                    rx.box(chat_view(), flex="1", height="100%"),
+                    rx.fragment(),
+                ),
+                rx.cond(
+                    BaseState.show_cards,
+                    rx.box(cards_view(), flex="1", height="100%"),
+                    rx.fragment(),
+                ),
+                align_items="stretch",
+                gap="8px",
+                padding="8px",
+                width="100%",
+                height="100vh",
+                max_height="100vh",
+                overflow="hidden",
             ),
-            rx.cond(
-                BaseState.show_chat,
-                rx.box(chat_view(), flex="1", height="100%"),
-                rx.fragment(),
-            ),
-            rx.cond(
-                BaseState.show_cards,
-                rx.box(cards_view(), flex="1", height="100%"),
-                rx.fragment(),
-            ),
-            align_items="stretch",
-            gap="8px",
-            padding="8px",
+            height="100vh",
             width="100%",
-            height="100%",
+            spacing="0",
+            background_color=BACKGROUND,
         ),
-        height="100vh",
-        width="100%",
-        spacing="0",
-        background_color=BACKGROUND,
+        appearance="dark",
     )
 
 

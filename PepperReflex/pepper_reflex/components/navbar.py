@@ -28,7 +28,11 @@ def navbar() -> rx.Component:
         ),
         rx.spacer(),
         rx.hstack(
-            rx.progress(value=BaseState.progress, width="140px"),
+            rx.progress(
+                value=BaseState.progress_value,
+                width="140px",
+                display=rx.cond(BaseState.progress_value > 0, "block", "none"),
+            ),
             rx.text(
                 BaseState.status_text,
                 font_size="0.8rem",

@@ -102,6 +102,10 @@ class BaseState(rx.State):
         cards = f"{self.cards_ratio}fr" if self.show_cards else "0fr"
         return f"{settings} {chat} {cards}"
 
+    @rx.var
+    def progress_value(self) -> int:
+        return self.progress
+
 
 class SettingsState(BaseState):
     sections: List[Dict[str, str]] = [
