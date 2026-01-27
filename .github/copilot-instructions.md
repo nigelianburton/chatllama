@@ -4,7 +4,8 @@
 
 Automation and tooling
 - The chat layer parses tool requests and surfaces tool calls/results in the conversation.
-- The internal MCP server advertises card tools (first card: SVG) and supports external MCP tools over HTTP/stdio.
+- Internal MCPs are loaded from MCP_Internal/mcp_*.py and share a single FastMCP HTTP server.
+- Internal MCP tools are prefixed (e.g., internal.mcp_card_svg.CreateCard).
 - Autorun uses JSON input with explicit message boundaries; avoid silent fallbacks during development.
 	- Single-instance behavior: if ChatLlama is already running, new launches forward the args (including autorun) to the existing instance and then exit.
 	- Run autorun via the CLI: PEPPER.py --autorun <path-to-autorun-json>.
@@ -49,7 +50,7 @@ File organization
 - PEPPER.py: main Qt window, splitters, toolbars, wiring
 - Engine/: runtime logic (models, MCP servers, chat manager, logging utilities)
 - UI/: Qt widgets for Settings, Chat, Cards, and subpanels
-- MCP_Internal/: internal MCP tools (SVG card)
+- MCP_Internal/: internal MCPs (mcp_*.py) + shared card widgets/handlers
 - Tools/: tool protocol adapters, registry, executor, MCP client manager
 - autoruns/: autorun JSON inputs
 - scripts/, testers/, tests/: scripts and validation harnesses
@@ -60,8 +61,12 @@ SIMPLE key files overview
 - UI/column_settings.py: Settings column UI, model discovery callback, settings file creation
 - UI/column_chat.py: Chat column UI, message widgets, attachments bar, model-ready state
 - UI/column_cards.py: Cards column container and layout
-- MCP_Internal/svg_card.py: SVG card widget with aspect ratio handling
-- Engine/mcp_internal_server.py: FastMCP server for SVG card tools
+- MCP_Internal/card_svg.py: SVG card widget + tool registration
+- MCP_Internal/card_svg_handler.py: SVG validation/parsing + instructions
+- MCP_Internal/card_textviewer_handler.py: text viewer validation + SVG generation
+- MCP_Internal/mcp_card_svg.py: built-in SVG MCP entrypoint
+- MCP_Internal/mcp_card_textviewer.py: built-in text viewer MCP entrypoint
+- Engine/mcp_internal_server.py: FastMCP server + mcp_*.py loader
 - Engine/manager_models.py: llama-server status, model discovery, model state callbacks
 - Engine/logger.py: logging to console and settings_folder\logs
 - Engine/utilities.py: log_screenshot helper

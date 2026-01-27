@@ -1,1 +1,0 @@
-from UI.settings_local_models import SettingsLocalModels as ModelSelectorWidget

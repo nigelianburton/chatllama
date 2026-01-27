@@ -92,7 +92,7 @@
     "folder": "d:\\_GITN\\chatllama\\MCP_Local",
     "servers": {
       "fashion_stdio": {
-        "enabled": true,
+        "enabled": false,
         "transport": "stdio",
         "url": "http://127.0.0.1",
         "port": "6820",
@@ -104,15 +104,15 @@
         "discovered": true
       },
       "fashion_http": {
-        "enabled": false,
+        "enabled": true,
         "transport": "http",
         "url": "http://127.0.0.1",
         "port": "6820",
         "discovered": true,
         "methods": {
-          "get_fashion_look": true,
-          "get_all_looks": true,
-          "get_look_by_vibe": true
+          "get_fashion_look": false,
+          "get_all_looks": false,
+          "get_look_by_vibe": false
         }
       }
     }
@@ -120,8 +120,15 @@
   "built_in_mcps": {
     "svg_card": {
       "enabled": true
+    },
+    "mcp_card_textviewer": {
+      "enabled": true,
+      "tool_preamble": "You can only use these tools: mcp_card_textviewer.CreateCard, mcp_card_textviewer.DrawCard, mcp_card_textviewer.DeleteCard. You MUST call mcp_card_textviewer.CreateCard first to get a guid; never invent or guess guids. mcp_card_textviewer.CreateCard returns a response with a guid field. Then pass that exact guid to mcp_card_textviewer.DrawCard. mcp_card_textviewer.DrawCard renders multiline text in the card. Never output SVG in assistant messages; only provide text inside the mcp_card_textviewer.DrawCard tool call arguments. After mcp_card_textviewer.DrawCard succeeds, reply with a brief confirmation and do not call mcp_card_textviewer.DrawCard again unless the user requests changes."
+    },
+    "mcp_card_svg": {
+      "enabled": false,
+      "tool_preamble": "You can only use these tools: mcp_card_svg.CreateCard, mcp_card_svg.DrawCard, mcp_card_svg.DeleteCard. You MUST call mcp_card_svg.CreateCard first to get a guid; never invent or guess guids. mcp_card_svg.CreateCard returns a response with a guid field. Then pass that exact guid to mcp_card_svg.DrawCard. mcp_card_svg.DrawCard requires full SVG markup with a <svg> root sized 480x640 (portrait) or 640x480 (landscape). Never output SVG in assistant messages; only provide svg_instructions inside the mcp_card_svg.DrawCard tool call arguments. After mcp_card_svg.DrawCard succeeds, reply with a brief confirmation and do not call mcp_card_svg.DrawCard again unless the user requests changes. For images, use href values like resource:pic1-portrait.jpg or resource:pic2-landscape.jpg (from the resources folder). Do not embed base64 images in prompts. Do not call any other tools."
     }
   },
-  "tool_preamble_general": "Tools are available for this chat.",
-  "tool_preamble_cards": "SVG cards are UI-only. Do NOT output raw SVG in assistant messages. Always call internal.CreateCard first to get a guid, then call internal.DrawCard with a full <svg> document sized 480x640 (portrait) or 640x480 (landscape) ONLY inside the DrawCard tool call arguments. After DrawCard succeeds, reply with a brief confirmation and do not call DrawCard again unless the user requests changes. Never invent guids and never paste SVG in chat content."
+  "tool_preamble_general": "Tools are available for this chat."
 }
