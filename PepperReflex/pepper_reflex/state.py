@@ -108,14 +108,10 @@ class BaseState(rx.State):
 
     @rx.var
     def grid_template_columns(self) -> str:
-        columns = []
-        if self.show_settings:
-            columns.append("minmax(240px, 25%)")
-        if self.show_chat:
-            columns.append("1fr")
-        if self.show_cards:
-            columns.append("minmax(240px, 30%)")
-        return " ".join(columns) if columns else "1fr"
+        count = sum([self.show_settings, self.show_chat, self.show_cards])
+        if count == 0:
+            return "1fr"
+        return " ".join(["1fr"] * count)
 
     def toggle_tool_enabled(self, name: str) -> None:
         items = getattr(self, "mcp_items", None)
