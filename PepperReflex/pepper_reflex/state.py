@@ -106,6 +106,18 @@ class BaseState(rx.State):
     def progress_value(self) -> int:
         return self.progress
 
+    def toggle_tool_enabled(self, name: str) -> None:
+        items = getattr(self, "mcp_items", None)
+        if not isinstance(items, list):
+            return
+        updated = []
+        for item in items:
+            if item.get("name") == name:
+                updated.append({**item, "enabled": not bool(item.get("enabled"))})
+            else:
+                updated.append(item)
+        self.mcp_items = updated
+
 
 class BuiltInMcpItem(TypedDict):
     name: str

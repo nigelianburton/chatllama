@@ -30,6 +30,7 @@ def navbar() -> rx.Component:
         rx.progress(
             value=BaseState.progress_value,
             width="150px",
+            color_scheme="teal",
         ),
         rx.hstack(
             rx.text(

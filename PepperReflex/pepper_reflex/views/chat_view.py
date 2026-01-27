@@ -31,6 +31,11 @@ def chat_view() -> rx.Component:
                         value=ChatState.input_text,
                         on_change=ChatState.set_input_text,
                         color="white",
+                        background_color="#25262b",
+                        style={
+                            "color": "white !important",
+                            "background_color": "#25262b !important",
+                        },
                         **CHAT_TEXTAREA_STYLE,
                     ),
                     rx.button(

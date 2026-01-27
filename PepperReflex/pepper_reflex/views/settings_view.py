@@ -72,9 +72,13 @@ def settings_view() -> rx.Component:
                                     SettingsState.mcp_items,
                                     lambda item: rx.vstack(
                                         rx.hstack(
-                                            rx.button(
-                                                rx.cond(item["enabled"], "✓", "✗"),
-                                                on_click=SettingsState.toggle_mcp(item["name"]),
+                                            rx.icon_button(
+                                                rx.cond(
+                                                    item["enabled"],
+                                                    rx.icon("check"),
+                                                    rx.icon("x"),
+                                                ),
+                                                on_click=lambda: SettingsState.toggle_tool_enabled(item["name"]),
                                                 size="1",
                                             ),
                                             rx.text(

@@ -110,7 +110,6 @@ CHAT_INPUT_ROW = {
 CHAT_TEXTAREA_STYLE = {
     "width": "90%",
     "height": "70px",
-    "background_color": "#25262b !important",
     "placeholder_color": "#909296",
     "border": f"1px solid {SECTION_BORDER}",
     "focus_border_color": ACCENT_BLUE,
