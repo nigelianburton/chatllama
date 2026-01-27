@@ -14,9 +14,20 @@ class SettingsLocalMcps(QtWidgets.QFrame):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
-        self.title_label = QtWidgets.QLabel("settings local mcps")
-        self.title_label.setStyleSheet("font-weight: bold; color: #3a3a3a;")
-        layout.addWidget(self.title_label)
+        self._toggle_button = QtWidgets.QToolButton()
+        self._toggle_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._toggle_button.setArrowType(QtCore.Qt.ArrowType.RightArrow)
+        self._toggle_button.setText("settings local mcps")
+        self._toggle_button.setCheckable(True)
+        self._toggle_button.setChecked(False)
+        self._toggle_button.setStyleSheet("font-weight: bold; color: #3a3a3a;")
+        self._toggle_button.toggled.connect(self._on_toggled)
+        layout.addWidget(self._toggle_button)
+
+        self._content_widget = QtWidgets.QWidget()
+        content_layout = QtWidgets.QVBoxLayout(self._content_widget)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(8)
 
         mcp_row = QtWidgets.QHBoxLayout()
         mcp_row.setContentsMargins(0, 0, 0, 0)
@@ -34,7 +45,7 @@ class SettingsLocalMcps(QtWidgets.QFrame):
         mcp_row.addWidget(self.folder_label)
         mcp_row.addWidget(self.folder_edit, 1)
         mcp_row.addWidget(self.folder_button)
-        layout.addLayout(mcp_row)
+        content_layout.addLayout(mcp_row)
 
         add_row = QtWidgets.QHBoxLayout()
         add_row.setContentsMargins(0, 0, 0, 0)
@@ -52,7 +63,7 @@ class SettingsLocalMcps(QtWidgets.QFrame):
         add_row.addWidget(self.add_local_button)
         add_row.addWidget(self.add_file_edit, 1)
         add_row.addWidget(self.add_file_button)
-        layout.addLayout(add_row)
+        content_layout.addLayout(add_row)
 
         self.panel = QtWidgets.QScrollArea()
         self.panel.setWidgetResizable(True)
@@ -66,4 +77,13 @@ class SettingsLocalMcps(QtWidgets.QFrame):
         self.panel_layout.addStretch(1)
 
         self.panel.setWidget(self.panel_container)
-        layout.addWidget(self.panel)
+        content_layout.addWidget(self.panel)
+
+        self._content_widget.setVisible(False)
+        layout.addWidget(self._content_widget)
+
+    def _on_toggled(self, checked: bool) -> None:
+        self._content_widget.setVisible(checked)
+        self._toggle_button.setArrowType(
+            QtCore.Qt.ArrowType.DownArrow if checked else QtCore.Qt.ArrowType.RightArrow
+        )

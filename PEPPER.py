@@ -17,10 +17,8 @@ from Engine.mcp_internal_server import InternalMcpServer
 from Engine.autorun import run_autorun
 from Engine.interaction_logger import init_interaction_logger
 from Engine.utilities import Utilities, set_model_download_callback
-from UI.column_chat import ChatColumnWidget
-from UI.column_cards import ColumnCardsWidget
-from UI.column_settings import ColumnSettingsWidget
-from MCP_Internal.svg_card import SVGCard
+from UI.page_main import MainPageWidget
+from MCP_Internal.card_svg import SVGCard
 from constants import (
     HEADER_COLOR_FAULT,
     HEADER_COLOR_LOADING,
@@ -28,8 +26,6 @@ from constants import (
     SETTINGS_DEV,
     SETTINGS_HOME,
     SETTINGS_WORK,
-    TOGGLE_OFF_COLOR,
-    TOGGLE_ON_COLOR,
 )
 
 SINGLE_INSTANCE_MUTEX = "ChatLlamaSingleInstance"
@@ -145,52 +141,6 @@ def _acquire_single_instance(logger, argv: list[str]) -> bool:
         return False
 
 
-class ColumnPanel(QtWidgets.QFrame):
-    def __init__(
-        self,
-        title: str,
-        color: str,
-        content_widget: Optional[QtWidgets.QWidget] = None,
-        header_color: Optional[str] = None,
-    ) -> None:
-        super().__init__()
-        self._logger = get_logger(self)
-
-        self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
-        self.setStyleSheet(f"background-color: {color};")
-
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        self._toolbar = QtWidgets.QToolBar()
-        self._toolbar.setIconSize(QtCore.QSize(16, 16))
-        self._toolbar.setMovable(False)
-        self._toolbar.setStyleSheet(f"background-color: {header_color or color};")
-
-        title_label = QtWidgets.QLabel(title)
-        title_label.setStyleSheet("font-weight: bold; padding: 4px;")
-
-        spacer = QtWidgets.QWidget()
-        spacer.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred)
-
-        self._toolbar.addWidget(title_label)
-        self._toolbar.addWidget(spacer)
-
-        layout.addWidget(self._toolbar)
-
-        if content_widget is None:
-            content = QtWidgets.QLabel(f"{title} content")
-            content.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-            content_widget = content
-        layout.addWidget(content_widget, 1)
-
-    def set_header_color(self, color: str) -> None:
-        self._toolbar.setStyleSheet(f"background-color: {color};")
-
-
-
-
 class ChatLlamaWindow(QtWidgets.QMainWindow):
     def __init__(self, exit_idle: bool, log_file: Path, settings_folder: Path) -> None:
         super().__init__()
@@ -206,68 +156,27 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("ChatLlama - SIMPLE")
         self.resize(1200, 800)
 
-        self._central = QtWidgets.QWidget()
-        self.setCentralWidget(self._central)
+        self._page = MainPageWidget(settings_folder)
+        self.setCentralWidget(self._page)
 
-        main_layout = QtWidgets.QVBoxLayout(self._central)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+        self._model_title = self._page.model_title_label
+        self._status_text = self._page.status_label
+        self._progress = self._page.progress_bar
 
-        top_toolbar = QtWidgets.QToolBar()
-        top_toolbar.setMovable(False)
-        self._model_title = QtWidgets.QLabel("Model: None")
-        self._model_title.setStyleSheet("font-weight: bold;")
-        top_toolbar.addWidget(self._model_title)
-
-        toolbar_spacer = QtWidgets.QWidget()
-        toolbar_spacer.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred
-        )
-        top_toolbar.addWidget(toolbar_spacer)
-
-        self._status_text = QtWidgets.QLabel("50%")
-        self._status_text.setFixedWidth(50)
-        self._status_text.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
-        self._status_text.setVisible(False)
-        top_toolbar.addWidget(self._status_text)
-
-        self._progress = QtWidgets.QProgressBar()
-        self._progress.setFixedWidth(150)
-        self._progress.setRange(0, 100)
-        self._progress.setValue(0)
-        top_toolbar.addWidget(self._progress)
-        self._top_toolbar = top_toolbar
-        main_layout.addWidget(top_toolbar)
-
-        self._toggle_style = (
-            f"QToolButton {{ background: {TOGGLE_OFF_COLOR}; padding: 4px; }}"
-            f"QToolButton:checked {{ background: {TOGGLE_ON_COLOR}; }}"
-        )
-
-        self._splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
-        main_layout.addWidget(self._splitter, 1)
-
-        self._columns: Dict[str, QtWidgets.QWidget] = {}
-        self._column_visible: Dict[str, bool] = {}
-        self._toggle_buttons: Dict[str, QtWidgets.QToolButton] = {}
-
-        self._settings_container = ColumnSettingsWidget(settings_folder)
+        self._settings_container = self._page.settings_container
         self._settings_container.model_state_updated.connect(self._on_model_state_updated)
         self._settings_container.model_load_started.connect(self._on_model_load_started)
         self._settings_container.model_load_finished.connect(self._on_model_load_finished)
         self._settings_container.cache_warm_started.connect(self._on_cache_warm_started)
         self._settings_container.cache_warm_finished.connect(self._on_cache_warm_finished)
         self._settings_container.model_changed.connect(self._on_model_changed)
-        self._add_column("Settings", "#f7e0e0", content_widget=self._settings_container)
-        self._chat_container = ChatColumnWidget()
+
+        self._chat_container = self._page.chat_container
         self._settings_container.mcp_settings_changed.connect(self._chat_container.refresh_mcp_tools)
         self._chat_container.model_state_updated.connect(self._on_model_state_updated)
-        self._add_column("Chat", "#e0f7e0", content_widget=self._chat_container)
-        self._cards_container = ColumnCardsWidget()
-        self._cards_layout = self._cards_container.cards_layout
-        self._add_column("Cards", "#e0e8f7", content_widget=self._cards_container)
 
-        self._apply_splitter_sizes()
+        self._cards_container = self._page.cards_container
+        self._cards_layout = self._page.cards_layout
         
         # Register callback for Moondream2 model download messages
         set_model_download_callback(lambda msg: self.show_status_message(msg, duration_ms=5000))
@@ -308,9 +217,7 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
         return HEADER_COLOR_FAULT, HEADER_COLOR_FAULT
 
     def _set_column_header_color(self, name: str, color: str) -> None:
-        panel = self._columns.get(name)
-        if isinstance(panel, ColumnPanel):
-            panel.set_header_color(color)
+        self._page.set_column_header_color(name, color)
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:
         super().showEvent(event)
@@ -325,43 +232,6 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
         self._logger.info(
             "Skipping in-process Moondream2 preload; external snapshot analyzer will be used"
         )
-
-    def _add_column(
-        self,
-        name: str,
-        color: str,
-        content_widget: Optional[QtWidgets.QWidget] = None,
-        header_color: Optional[str] = None,
-    ) -> None:
-        def on_toggle(checked: bool) -> None:
-            self._column_visible[name] = checked
-            widget = self._columns[name]
-            widget.setVisible(checked)
-            self._apply_splitter_sizes()
-
-        panel = ColumnPanel(name, color, content_widget=content_widget, header_color=header_color)
-        self._splitter.addWidget(panel)
-        self._columns[name] = panel
-        self._column_visible[name] = True
-
-        toggle = QtWidgets.QToolButton()
-        toggle.setText(name)
-        toggle.setCheckable(True)
-        toggle.setChecked(True)
-        toggle.setStyleSheet(self._toggle_style)
-        toggle.clicked.connect(lambda checked, n=name: on_toggle(checked))
-        self._top_toolbar.addWidget(toggle)
-        self._toggle_buttons[name] = toggle
-
-
-    def _apply_splitter_sizes(self) -> None:
-        visible = [name for name, is_on in self._column_visible.items() if is_on]
-        if not visible:
-            sizes = [0 for _ in self._columns]
-        else:
-            per = int(1000 / len(visible))
-            sizes = [per if self._column_visible[name] else 0 for name in self._columns]
-        self._splitter.setSizes(sizes)
 
     def _start_mcp_server(self) -> None:
         if self._mcp_server is None:

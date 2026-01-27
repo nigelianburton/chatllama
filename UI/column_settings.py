@@ -17,18 +17,16 @@ from PyQt6 import QtCore, QtWidgets
 from Engine.logger import get_logger
 from constants import (
     DEFAULT_MODEL_FILE,
-    DEFAULT_TOOL_PREAMBLE_CARDS,
     DEFAULT_TOOL_PREAMBLE_GENERAL,
-    MCP_LABEL_WIDTH,
-    MCP_PORT_INPUT_WIDTH,
     PEPPER_SETTINGS_FILE,
-    TOGGLE_DISABLED_COLOR,
-    TOGGLE_OFF_COLOR,
-    TOGGLE_ON_COLOR,
+    INTERNAL_MCP_HOST,
+    INTERNAL_MCP_PORT,
 )
 from UI.settings_local_models import SettingsLocalModels
 from UI.settings_local_mcps import SettingsLocalMcps
-from UI.settings_built_in_mcps import SettingsBuiltInMcps, BuiltInMcpEntryWidget
+from UI.settings_built_in_mcps import SettingsBuiltInMcps
+from UI.settings_tools_preambles import SettingsToolsPreambles
+from UI.setting_mcp_item import SettingsMcpItem
 
 
 class ColumnSettingsWidget(QtWidgets.QWidget):
@@ -51,7 +49,8 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         self._last_model_state: tuple[str, str] | None = None
         self._last_load_enabled: bool | None = None
         self._mcp_folder = Path(__file__).resolve().parents[1] / "MCP_Local"
-        self._mcp_entries: dict[str, dict[str, object]] = {}
+        self._mcp_entries: dict[str, SettingsMcpItem] = {}
+        self._built_in_entries: dict[str, SettingsMcpItem] = {}
         self._mcp_polling = False
         self._mcp_poll_lock = threading.Lock()
         self._mcp_timer = QtCore.QTimer(self)
@@ -95,44 +94,13 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         self._built_in_widget = SettingsBuiltInMcps()
         layout.addWidget(self._built_in_widget)
 
-        tool_preamble_frame = QtWidgets.QFrame()
-        tool_preamble_frame.setStyleSheet(
-            "QFrame { background: #f9f9ff; border: 1px solid #c6d3e8; border-radius: 6px; }"
-        )
-        tool_preamble_layout = QtWidgets.QVBoxLayout(tool_preamble_frame)
-        tool_preamble_layout.setContentsMargins(8, 8, 8, 8)
-        tool_preamble_layout.setSpacing(6)
+        self._tool_preamble_widget = SettingsToolsPreambles()
+        layout.addWidget(self._tool_preamble_widget)
 
-        tool_preamble_title = QtWidgets.QLabel("Tool preamble")
-        tool_preamble_title.setStyleSheet("font-weight: bold; color: #3a3a3a;")
-        tool_preamble_layout.addWidget(tool_preamble_title)
-
-        general_label = QtWidgets.QLabel("General tools preamble")
-        tool_preamble_layout.addWidget(general_label)
-
-        self._tool_preamble_general_edit = QtWidgets.QPlainTextEdit()
+        self._tool_preamble_general_edit = self._tool_preamble_widget.general_item.text_edit
         self._tool_preamble_general_edit.setPlaceholderText(DEFAULT_TOOL_PREAMBLE_GENERAL)
-        self._tool_preamble_general_edit.setFixedHeight(72)
-        tool_preamble_layout.addWidget(self._tool_preamble_general_edit)
-
-        cards_label = QtWidgets.QLabel("Card tools preamble")
-        tool_preamble_layout.addWidget(cards_label)
-
-        self._tool_preamble_cards_edit = QtWidgets.QPlainTextEdit()
-        self._tool_preamble_cards_edit.setPlaceholderText(DEFAULT_TOOL_PREAMBLE_CARDS)
-        self._tool_preamble_cards_edit.setFixedHeight(96)
-        tool_preamble_layout.addWidget(self._tool_preamble_cards_edit)
-
-        tool_preamble_buttons = QtWidgets.QHBoxLayout()
-        tool_preamble_buttons.addStretch(1)
-
-        self._tool_preamble_save = QtWidgets.QPushButton("Save")
-        self._tool_preamble_save.setFixedWidth(80)
-        self._tool_preamble_save.clicked.connect(self._save_tool_preamble)
-        tool_preamble_buttons.addWidget(self._tool_preamble_save)
-
-        tool_preamble_layout.addLayout(tool_preamble_buttons)
-        layout.addWidget(tool_preamble_frame)
+        self._tool_preamble_general_save = self._tool_preamble_widget.general_item.save_button
+        self._tool_preamble_general_save.clicked.connect(self._save_tool_preamble)
 
 
         placeholder = QtWidgets.QLabel("Settings")
@@ -155,7 +123,6 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
                         "settings_folder": str(self._settings_folder),
                         "default_model": DEFAULT_MODEL_FILE,
                         "tool_preamble_general": DEFAULT_TOOL_PREAMBLE_GENERAL,
-                        "tool_preamble_cards": DEFAULT_TOOL_PREAMBLE_CARDS,
                     },
                     indent=2,
                 )
@@ -174,9 +141,8 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         if not data.get("tool_preamble_general"):
             data["tool_preamble_general"] = DEFAULT_TOOL_PREAMBLE_GENERAL
             dirty = True
-        if not data.get("tool_preamble_cards"):
-            legacy_preamble = data.get("tool_preamble")
-            data["tool_preamble_cards"] = legacy_preamble or DEFAULT_TOOL_PREAMBLE_CARDS
+        if "tool_preamble_cards" in data:
+            data.pop("tool_preamble_cards", None)
             dirty = True
         if "built_in_mcps" not in data:
             data["built_in_mcps"] = {}
@@ -230,27 +196,17 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         settings_path = self._settings_folder / PEPPER_SETTINGS_FILE
         if not settings_path.exists():
             self._tool_preamble_general_edit.setPlainText(DEFAULT_TOOL_PREAMBLE_GENERAL)
-            self._tool_preamble_cards_edit.setPlainText(DEFAULT_TOOL_PREAMBLE_CARDS)
             return
         try:
             data = json.loads(settings_path.read_text())
         except Exception:
             data = {}
         general = data.get("tool_preamble_general") or ""
-        cards = data.get("tool_preamble_cards") or ""
-        legacy = data.get("tool_preamble")
-        if legacy and not cards:
-            cards = legacy
-            data["tool_preamble_cards"] = cards
         if not general:
             general = DEFAULT_TOOL_PREAMBLE_GENERAL
-        if not cards:
-            cards = DEFAULT_TOOL_PREAMBLE_CARDS
         self._tool_preamble_general_edit.setPlainText(general)
-        self._tool_preamble_cards_edit.setPlainText(cards)
-        if legacy:
-            data.setdefault("tool_preamble_general", general)
-            data.pop("tool_preamble", None)
+        if "tool_preamble_cards" in data:
+            data.pop("tool_preamble_cards", None)
             settings_path.write_text(json.dumps(data, indent=2))
 
     def _save_tool_preamble(self) -> None:
@@ -260,9 +216,8 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         except Exception:
             data = {}
         general = self._tool_preamble_general_edit.toPlainText().strip()
-        cards = self._tool_preamble_cards_edit.toPlainText().strip()
         data["tool_preamble_general"] = general or DEFAULT_TOOL_PREAMBLE_GENERAL
-        data["tool_preamble_cards"] = cards or DEFAULT_TOOL_PREAMBLE_CARDS
+        data.pop("tool_preamble_cards", None)
         settings_path.write_text(json.dumps(data, indent=2))
 
 
@@ -340,191 +295,139 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
             if widget:
                 widget.deleteLater()
 
+        self._built_in_entries.clear()
+
         internal_folder = Path(__file__).resolve().parents[1] / "MCP_Internal"
         if not internal_folder.exists():
             return
 
-        local_ip = self._get_local_ip()
+        self._built_in_widget.set_endpoint(INTERNAL_MCP_HOST, str(INTERNAL_MCP_PORT))
 
-        for entry in sorted(internal_folder.glob("*.py")):
-            if entry.name == "__init__.py":
-                continue
+        for entry in sorted(internal_folder.glob("mcp_*.py")):
             name = entry.stem
+            try:
+                module = self._load_internal_module(name, entry)
+            except Exception as exc:
+                self._logger.warning("Failed to load built-in MCP %s: %s", name, exc)
+                continue
+            tool_names = self._get_internal_tool_names(module)
+            preamble = self._get_internal_preamble(module, name)
             state = self._get_built_in_mcp_state(name)
+            if preamble and not state.get("tool_preamble"):
+                state["tool_preamble"] = preamble
+                self._store_built_in_mcp_state(name, state)
             enabled = bool(state.get("enabled", True))
 
             def handle_toggle_change(checked: bool, mcp_name: str = name) -> None:
-                self._store_built_in_mcp_state(mcp_name, {"enabled": checked})
+                state = self._get_built_in_mcp_state(mcp_name)
+                state["enabled"] = checked
+                if preamble and not state.get("tool_preamble"):
+                    state["tool_preamble"] = preamble
+                self._store_built_in_mcp_state(mcp_name, state)
 
-            widget = BuiltInMcpEntryWidget(
+            item = SettingsMcpItem(
                 name=name,
-                url=f"http://{local_ip}",
-                port="6821",
-                methods=["CreateCard", "DrawCard", "DeleteCard"],
+                path=None,
                 enabled=enabled,
-                on_toggle=handle_toggle_change,
+                transport="http",
+                url="",
+                port="",
+                on_delete=lambda: None,
+                show_transport_controls=False,
+                show_connection_fields=False,
+                show_delete_button=False,
             )
+            item.set_methods_badges(tool_names)
+            item.set_preamble(state.get("tool_preamble") or preamble)
+            item.toggle.toggled.connect(handle_toggle_change)
+
+            self._built_in_entries[name] = item
             self._built_in_widget.panel_layout.insertWidget(
                 self._built_in_widget.panel_layout.count() - 1,
-                widget,
+                item,
             )
 
-    def _get_local_ip(self) -> str:
+    def _load_internal_module(self, name: str, path: Path):
+        spec = importlib.util.spec_from_file_location(f"MCP_Internal.{name}", path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Could not load internal MCP {name}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def _get_internal_tool_names(self, module: object) -> list[str]:
+        names = getattr(module, "MCP_TOOL_NAMES", None)
+        if isinstance(names, list):
+            return [str(name) for name in names]
+        getter = getattr(module, "get_tool_names", None)
+        if callable(getter):
+            try:
+                result = getter()
+            except Exception:
+                result = []
+            if isinstance(result, list):
+                return [str(name) for name in result]
+        return []
+
+    def _get_internal_preamble(self, module: object, name: str) -> str:
+        getter = getattr(module, "get_instructions", None)
+        if not callable(getter):
+            return ""
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.connect(("8.8.8.8", 80))
-            ip = sock.getsockname()[0]
-            sock.close()
-            return ip
-        except Exception:
-            return "127.0.0.1"
+            return str(getter(name) or "")
+        except TypeError:
+            return str(getter() or "")
 
     def _build_mcp_entry(self, name: str, path: Path, state: dict) -> QtWidgets.QWidget:
-        container = QtWidgets.QFrame()
-        container.setStyleSheet("QFrame { border: 1px solid #ccc; background: #fafafa; }")
-        layout = QtWidgets.QVBoxLayout(container)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(6)
-
-        row = QtWidgets.QHBoxLayout()
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
-
         enabled = bool(state.get("enabled", False))
         transport = state.get("transport", "stdio")
-
-        toggle_style = (
-            f"QToolButton {{ background: {TOGGLE_OFF_COLOR}; padding: 4px 8px; border: 1px solid #999; color: #b00020; }}"
-            f"QToolButton:checked {{ background: {TOGGLE_ON_COLOR}; color: #000000; }}"
-            f"QToolButton:disabled {{ background: {TOGGLE_DISABLED_COLOR}; color: #777; }}"
+        item = SettingsMcpItem(
+            name=name,
+            path=path,
+            enabled=enabled,
+            transport=transport,
+            url=state.get("url", "http://127.0.0.1"),
+            port=str(state.get("port", "6820")),
+            on_delete=lambda: self._delete_local_mcp(name, path),
         )
-
-        toggle = QtWidgets.QToolButton()
-        toggle.setCheckable(True)
-        toggle.setChecked(enabled)
-        toggle.setStyleSheet(toggle_style)
-
-        def update_toggle_text(checked: bool) -> None:
-            toggle.setText("✓" if checked else "✗")
-
-        update_toggle_text(enabled)
-
-        name_label = QtWidgets.QLabel(name)
-        name_label.setStyleSheet("font-weight: bold;")
-
-        stdio_radio = QtWidgets.QToolButton()
-        stdio_radio.setText("stdio")
-        stdio_radio.setCheckable(True)
-        stdio_radio.setStyleSheet(toggle_style)
-
-        http_radio = QtWidgets.QToolButton()
-        http_radio.setText("http")
-        http_radio.setCheckable(True)
-        http_radio.setStyleSheet(toggle_style)
-
-        transport_group = QtWidgets.QButtonGroup(container)
-        transport_group.setExclusive(True)
-        transport_group.addButton(stdio_radio)
-        transport_group.addButton(http_radio)
-
-        if transport == "http":
-            http_radio.setChecked(True)
-        else:
-            stdio_radio.setChecked(True)
-
-        delete_button = QtWidgets.QToolButton()
-        delete_button.setText("✕")
-        delete_button.setFixedWidth(22)
-        delete_button.clicked.connect(lambda: self._delete_local_mcp(name, path))
-
-        row.addWidget(toggle)
-        row.addWidget(name_label, 1)
-        row.addWidget(stdio_radio)
-        row.addWidget(http_radio)
-        row.addWidget(delete_button)
-        layout.addLayout(row)
-
-        http_row = QtWidgets.QHBoxLayout()
-        http_row.setContentsMargins(0, 0, 0, 0)
-        http_row.setSpacing(6)
-        url_label = QtWidgets.QLabel("URL")
-        port_label = QtWidgets.QLabel("PORT")
-        url_edit = QtWidgets.QLineEdit(state.get("url", "http://127.0.0.1"))
-        port_edit = QtWidgets.QLineEdit(str(state.get("port", "6820")))
-        port_edit.setFixedWidth(MCP_PORT_INPUT_WIDTH)
-        url_label.setMinimumWidth(MCP_LABEL_WIDTH)
-        port_label.setMinimumWidth(MCP_LABEL_WIDTH)
-        http_row.addWidget(url_label)
-        http_row.addWidget(url_edit, 1)
-        http_row.addWidget(port_label)
-        http_row.addWidget(port_edit)
-        layout.addLayout(http_row)
-
-        methods_container = QtWidgets.QWidget()
-        methods_layout = QtWidgets.QHBoxLayout(methods_container)
-        methods_layout.setContentsMargins(0, 0, 0, 0)
-        methods_layout.setSpacing(6)
-        layout.addWidget(methods_container)
-
-        http_row_widget = http_row
-
-        def update_http_visibility() -> None:
-            http_visible = http_radio.isChecked()
-            url_label.setVisible(http_visible)
-            url_edit.setVisible(http_visible)
-            port_label.setVisible(http_visible)
-            port_edit.setVisible(http_visible)
-
-        update_http_visibility()
 
         def save_state() -> None:
             server_state = self._get_mcp_state(name)
-            server_state["enabled"] = toggle.isChecked()
-            server_state["transport"] = "http" if http_radio.isChecked() else "stdio"
-            server_state["url"] = url_edit.text().strip()
-            server_state["port"] = port_edit.text().strip()
+            server_state["enabled"] = item.toggle.isChecked()
+            server_state["transport"] = "http" if item.http_radio.isChecked() else "stdio"
+            server_state["url"] = item.url_edit.text().strip()
+            server_state["port"] = item.port_edit.text().strip()
             self._store_mcp_state(name, server_state)
 
         def handle_transport_change() -> None:
-            update_http_visibility()
+            item.update_http_visibility()
             server_state = self._get_mcp_state(name)
             server_state["discovered"] = False
             self._store_mcp_state(name, server_state)
             save_state()
-            if toggle.isChecked():
+            if item.toggle.isChecked():
                 self._maybe_discover_methods(name)
 
         def handle_toggle_change() -> None:
-            update_toggle_text(toggle.isChecked())
+            item.update_toggle_text(item.toggle.isChecked())
             save_state()
-            self._set_method_widgets_enabled(name, toggle.isChecked())
-            self._set_transport_widgets_enabled(name, toggle.isChecked())
-            if toggle.isChecked():
+            self._set_method_widgets_enabled(name, item.toggle.isChecked())
+            self._set_transport_widgets_enabled(name, item.toggle.isChecked())
+            if item.toggle.isChecked():
                 self._maybe_discover_methods(name)
 
-        toggle.toggled.connect(handle_toggle_change)
-        stdio_radio.toggled.connect(handle_transport_change)
-        http_radio.toggled.connect(handle_transport_change)
-        url_edit.textChanged.connect(save_state)
-        port_edit.textChanged.connect(save_state)
+        item.toggle.toggled.connect(handle_toggle_change)
+        item.stdio_radio.toggled.connect(handle_transport_change)
+        item.http_radio.toggled.connect(handle_transport_change)
+        item.url_edit.textChanged.connect(save_state)
+        item.port_edit.textChanged.connect(save_state)
 
-        self._mcp_entries[name] = {
-            "path": path,
-            "toggle": toggle,
-            "stdio_radio": stdio_radio,
-            "http_radio": http_radio,
-            "url_edit": url_edit,
-            "port_edit": port_edit,
-            "url_label": url_label,
-            "port_label": port_label,
-            "methods_layout": methods_layout,
-            "delete_button": delete_button,
-        }
+        self._mcp_entries[name] = item
 
         self._populate_method_toggles(name, state)
         self._set_method_widgets_enabled(name, enabled)
         self._set_transport_widgets_enabled(name, enabled)
-        return container
+        return item
 
     def _delete_local_mcp(self, name: str, path: Path) -> None:
         try:
@@ -574,7 +477,7 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         entry = self._mcp_entries.get(name)
         if not entry:
             return
-        layout = entry["methods_layout"]
+        layout = entry.methods_layout
         while layout.count():
             item = layout.takeAt(0)
             widget = item.widget() if item else None
@@ -593,7 +496,7 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         entry = self._mcp_entries.get(name)
         if not entry:
             return
-        layout = entry["methods_layout"]
+        layout = entry.methods_layout
         for index in range(layout.count()):
             widget = layout.itemAt(index).widget()
             if widget:
@@ -603,12 +506,12 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         entry = self._mcp_entries.get(name)
         if not entry:
             return
-        entry["stdio_radio"].setEnabled(enabled)
-        entry["http_radio"].setEnabled(enabled)
-        entry["url_label"].setEnabled(enabled)
-        entry["url_edit"].setEnabled(enabled)
-        entry["port_label"].setEnabled(enabled)
-        entry["port_edit"].setEnabled(enabled)
+        entry.stdio_radio.setEnabled(enabled)
+        entry.http_radio.setEnabled(enabled)
+        entry.url_label.setEnabled(enabled)
+        entry.url_edit.setEnabled(enabled)
+        entry.port_label.setEnabled(enabled)
+        entry.port_edit.setEnabled(enabled)
 
     def _update_method_state(self, name: str, method_name: str, enabled: bool) -> None:
         state = self._get_mcp_state(name)
@@ -623,7 +526,7 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         state = self._get_mcp_state(name)
         if state.get("discovered", False):
             return
-        transport = "http" if entry["http_radio"].isChecked() else "stdio"
+        transport = "http" if entry.http_radio.isChecked() else "stdio"
         if transport == "stdio":
             threading.Thread(target=self._discover_stdio_methods, args=(name,), daemon=True).start()
         else:
@@ -633,7 +536,7 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         entry = self._mcp_entries.get(name)
         if not entry:
             return
-        path = entry["path"]
+        path = entry.path
 
         def _worker() -> None:
             from fastmcp import Client
@@ -661,8 +564,8 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         entry = self._mcp_entries.get(name)
         if not entry:
             return
-        url = entry["url_edit"].text().strip()
-        port = entry["port_edit"].text().strip()
+        url = entry.url_edit.text().strip()
+        port = entry.port_edit.text().strip()
         if not url:
             return
         server_url = f"{url}:{port}/mcp" if port else url
@@ -714,14 +617,14 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
 
         targets: list[tuple[str, str, bool]] = []
         for name, entry in self._mcp_entries.items():
-            if not entry["http_radio"].isChecked():
+            if not entry.http_radio.isChecked():
                 continue
-            url = entry["url_edit"].text().strip()
-            port = entry["port_edit"].text().strip()
+            url = entry.url_edit.text().strip()
+            port = entry.port_edit.text().strip()
             if not url:
                 continue
             server_url = f"{url}:{port}/mcp" if port else url
-            toggle_checked = bool(entry["toggle"].isChecked())
+            toggle_checked = bool(entry.toggle.isChecked())
             targets.append((name, server_url, toggle_checked))
 
         def _worker() -> None:
@@ -754,8 +657,8 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
             if not entry:
                 continue
             color = "#2e7d32" if responsive else "#b71c1c"
-            entry["url_label"].setStyleSheet(f"background-color: {color}; color: #fff; padding: 2px;")
-            entry["port_label"].setStyleSheet(f"background-color: {color}; color: #fff; padding: 2px;")
+            entry.url_label.setStyleSheet(f"background-color: {color}; color: #fff; padding: 2px;")
+            entry.port_label.setStyleSheet(f"background-color: {color}; color: #fff; padding: 2px;")
             if responsive and toggle_checked:
                 self._maybe_discover_methods(name)
 

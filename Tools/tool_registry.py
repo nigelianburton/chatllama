@@ -22,5 +22,8 @@ class ToolRegistry:
     def list_tools(self) -> list[dict[str, Any]]:
         return [tool.schema for tool in self._tools.values() if tool.enabled]
 
+    def list_definitions(self) -> list[ToolDefinition]:
+        return list(self._tools.values())
+
     def get(self, name: str) -> ToolDefinition | None:
         return self._tools.get(name)

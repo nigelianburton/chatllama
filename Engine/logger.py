@@ -47,6 +47,15 @@ class _QuietFilter(logging.Filter):
         return True
 
 
+class _DowngradeSseErrors(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if "Error in standalone SSE writer" in message or "ClosedResourceError" in message:
+            record.levelno = logging.INFO
+            record.levelname = "INFO"
+        return True
+
+
 class ClassLoggerAdapter(logging.LoggerAdapter):
     def process(self, msg: str, kwargs: dict) -> tuple[str, dict]:
         extra = kwargs.setdefault("extra", {})
@@ -59,6 +68,7 @@ class _StreamToLogger:
         self._stream = stream
         self._logger = logger
         self._level = level
+        self._downgrade_sse_traceback = False
 
     def write(self, message: str) -> None:
         if not message:
@@ -69,6 +79,18 @@ class _StreamToLogger:
         stripped = message.strip()
         if not stripped:
             return
+        if "Error in standalone SSE writer" in stripped:
+            self._downgrade_sse_traceback = True
+            self._logger.log(logging.INFO, stripped)
+            return
+        if self._downgrade_sse_traceback:
+            if stripped.startswith("Traceback") or stripped.startswith("File ") or "ClosedResourceError" in stripped:
+                self._logger.log(logging.INFO, stripped)
+                if "ClosedResourceError" in stripped:
+                    self._downgrade_sse_traceback = False
+                return
+            if not stripped.startswith(" "):
+                self._downgrade_sse_traceback = False
         if stripped.startswith("["):
             self._logger.log(self._level, stripped)
         else:
@@ -166,6 +188,7 @@ def configure_logging(settings_folder: Path) -> LogConfig:
 
     classname_filter = _ClassnameFilter()
     quiet_filter = _QuietFilter({"fastmcp", "mcp", "uvicorn", "pydocket", "redis", "httpx", "httpcore"})
+    sse_filter = _DowngradeSseErrors()
     collapsing_file_handler = _CollapsingHandler(file_handler)
     collapsing_console_handler = _CollapsingHandler(console_handler)
 
@@ -176,6 +199,8 @@ def configure_logging(settings_folder: Path) -> LogConfig:
     collapsing_console_handler.addFilter(classname_filter)
     collapsing_file_handler.addFilter(quiet_filter)
     collapsing_console_handler.addFilter(quiet_filter)
+    collapsing_file_handler.addFilter(sse_filter)
+    collapsing_console_handler.addFilter(sse_filter)
 
     root_logger.addHandler(collapsing_file_handler)
     root_logger.addHandler(collapsing_console_handler)

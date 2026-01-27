@@ -25,7 +25,6 @@ from Tools.tool_registry import ToolDefinition, ToolRegistry
 from constants import (
     DEFAULT_MODEL_FILE,
     DEFAULT_MMPROJ_FILE,
-    DEFAULT_TOOL_PREAMBLE_CARDS,
     DEFAULT_TOOL_PREAMBLE_GENERAL,
     GGUF_MODELS_DIR,
     LLAMA_CPP_MODEL_INIT_FILE,
@@ -102,7 +101,6 @@ def launch_server() -> Optional[subprocess.Popen]:
             LLAMA_SERVER_HOST,
             LLAMA_SERVER_PORT,
         )
-        _logger.info("llama-server launch stack:\n%s", "".join(traceback.format_stack(limit=8)))
         process = subprocess.Popen(
             [
                 LLAMA_SERVER_EXE,
@@ -781,11 +779,8 @@ def _load_settings() -> dict:
     if not _settings_data.get("tool_preamble_general"):
         _settings_data["tool_preamble_general"] = DEFAULT_TOOL_PREAMBLE_GENERAL
         _save_settings(_settings_data)
-    if not _settings_data.get("tool_preamble_cards"):
-        legacy_preamble = _settings_data.get("tool_preamble")
-        _settings_data["tool_preamble_cards"] = legacy_preamble or DEFAULT_TOOL_PREAMBLE_CARDS
-        if legacy_preamble:
-            _settings_data.pop("tool_preamble", None)
+    if "tool_preamble_cards" in _settings_data:
+        _settings_data.pop("tool_preamble_cards", None)
         _save_settings(_settings_data)
     _settings_data.setdefault("model_cache", {})
     return _settings_data

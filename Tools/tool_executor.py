@@ -26,7 +26,7 @@ class ToolExecutor:
         if tool is None:
             return {"error": "unknown tool", "name": tool_call.name}
         if not tool.enabled:
-            if tool_call.name == f"{INTERNAL_MCP_NAME}.DrawCard":
+            if tool_call.name.startswith(f"{INTERNAL_MCP_NAME}.") and tool_call.name.endswith(".DrawCard"):
                 return {
                     "error": "DrawCard unavailable until CreateCard returns a GUID",
                     "hint": "Call internal.CreateCard first, then pass its GUID to internal.DrawCard.",

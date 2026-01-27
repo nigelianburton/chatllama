@@ -16,6 +16,31 @@ To use with LM Studio, add to C:\\Users\\{username}\\.lmstudio\\mcp-config.json:
 import random
 from fastmcp.server import FastMCP
 
+
+def _patch_sse_writer() -> None:
+    """Swallow ClosedResourceError when SSE clients disconnect during shutdown."""
+    try:
+        from mcp.server import streamable_http
+        from anyio import ClosedResourceError
+    except Exception:
+        return
+
+    original = getattr(streamable_http, "standalone_sse_writer", None)
+    if original is None:
+        return
+
+    if getattr(streamable_http, "_chatllama_patched", False):
+        return
+
+    async def _wrapped(*args, **kwargs):
+        try:
+            return await original(*args, **kwargs)
+        except ClosedResourceError:
+            return None
+
+    streamable_http.standalone_sse_writer = _wrapped
+    streamable_http._chatllama_patched = True
+
 # Initialize the MCP server
 server = FastMCP("fashion-advisor")
 
@@ -164,5 +189,7 @@ if __name__ == "__main__":
     print('}')
     print("\nServer starting on http://127.0.0.1:6820...")
     
+    _patch_sse_writer()
+
     # Run with HTTP transport on port 6820
     server.run(transport="http", host="127.0.0.1", port=6820)

@@ -4,16 +4,15 @@ from typing import Callable
 
 from PyQt6 import QtCore, QtWidgets
 
-from constants import MCP_LABEL_WIDTH, MCP_PORT_INPUT_WIDTH, TOGGLE_DISABLED_COLOR, TOGGLE_OFF_COLOR, TOGGLE_ON_COLOR
+from constants import TOGGLE_DISABLED_COLOR, TOGGLE_OFF_COLOR, TOGGLE_ON_COLOR
 
 
 class BuiltInMcpEntryWidget(QtWidgets.QFrame):
     def __init__(
         self,
         name: str,
-        url: str,
-        port: str,
         methods: list[str],
+        preamble: str | None,
         enabled: bool = True,
         on_toggle: Callable[[bool], None] | None = None,
     ) -> None:
@@ -47,12 +46,8 @@ class BuiltInMcpEntryWidget(QtWidgets.QFrame):
         name_label = QtWidgets.QLabel(name)
         name_label.setStyleSheet("font-weight: bold;")
 
-        http_label = QtWidgets.QLabel("http")
-        http_label.setStyleSheet("padding: 2px 6px; border: 1px solid #999; background: #f0f0f0;")
-
         row.addWidget(toggle)
         row.addWidget(name_label, 1)
-        row.addWidget(http_label)
         layout.addLayout(row)
 
         def handle_toggle_change(checked: bool) -> None:
@@ -61,28 +56,6 @@ class BuiltInMcpEntryWidget(QtWidgets.QFrame):
                 on_toggle(checked)
 
         toggle.toggled.connect(handle_toggle_change)
-
-        http_row = QtWidgets.QHBoxLayout()
-        http_row.setContentsMargins(0, 0, 0, 0)
-        http_row.setSpacing(6)
-
-        url_label = QtWidgets.QLabel("URL")
-        port_label = QtWidgets.QLabel("PORT")
-        url_label.setMinimumWidth(MCP_LABEL_WIDTH)
-        port_label.setMinimumWidth(MCP_LABEL_WIDTH)
-
-        url_edit = QtWidgets.QLineEdit(url)
-        url_edit.setReadOnly(True)
-
-        port_edit = QtWidgets.QLineEdit(port)
-        port_edit.setReadOnly(True)
-        port_edit.setFixedWidth(MCP_PORT_INPUT_WIDTH)
-
-        http_row.addWidget(url_label)
-        http_row.addWidget(url_edit, 1)
-        http_row.addWidget(port_label)
-        http_row.addWidget(port_edit)
-        layout.addLayout(http_row)
 
         methods_container = QtWidgets.QWidget()
         methods_layout = QtWidgets.QHBoxLayout(methods_container)
@@ -96,6 +69,16 @@ class BuiltInMcpEntryWidget(QtWidgets.QFrame):
 
         layout.addWidget(methods_container)
 
+        preamble_edit = QtWidgets.QPlainTextEdit()
+        preamble_edit.setReadOnly(True)
+        preamble_edit.setMaximumHeight(92)
+        if preamble:
+            preamble_edit.setPlainText(preamble)
+            preamble_edit.setVisible(True)
+        else:
+            preamble_edit.setVisible(False)
+        layout.addWidget(preamble_edit)
+
 
 class SettingsBuiltInMcps(QtWidgets.QFrame):
     def __init__(self) -> None:
@@ -108,9 +91,32 @@ class SettingsBuiltInMcps(QtWidgets.QFrame):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
-        self.title_label = QtWidgets.QLabel("settings built in mcps")
-        self.title_label.setStyleSheet("font-weight: bold; color: #3a3a3a;")
-        layout.addWidget(self.title_label)
+        self._toggle_button = QtWidgets.QToolButton()
+        header_row = QtWidgets.QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(8)
+
+        self._toggle_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._toggle_button.setArrowType(QtCore.Qt.ArrowType.RightArrow)
+        self._toggle_button.setText("settings built in mcps")
+        self._toggle_button.setCheckable(True)
+        self._toggle_button.setChecked(False)
+        self._toggle_button.setStyleSheet("font-weight: bold; color: #3a3a3a;")
+        self._toggle_button.toggled.connect(self._on_toggled)
+        header_row.addWidget(self._toggle_button)
+
+        header_row.addStretch(1)
+
+        self._endpoint_label = QtWidgets.QLabel("")
+        self._endpoint_label.setStyleSheet("color: #5a5a5a;")
+        header_row.addWidget(self._endpoint_label)
+
+        layout.addLayout(header_row)
+
+        self._content_widget = QtWidgets.QWidget()
+        content_layout = QtWidgets.QVBoxLayout(self._content_widget)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(8)
 
         self.panel = QtWidgets.QScrollArea()
         self.panel.setWidgetResizable(True)
@@ -124,4 +130,16 @@ class SettingsBuiltInMcps(QtWidgets.QFrame):
         self.panel_layout.addStretch(1)
 
         self.panel.setWidget(self.panel_container)
-        layout.addWidget(self.panel)
+        content_layout.addWidget(self.panel)
+
+        self._content_widget.setVisible(False)
+        layout.addWidget(self._content_widget)
+
+    def _on_toggled(self, checked: bool) -> None:
+        self._content_widget.setVisible(checked)
+        self._toggle_button.setArrowType(
+            QtCore.Qt.ArrowType.DownArrow if checked else QtCore.Qt.ArrowType.RightArrow
+        )
+
+    def set_endpoint(self, ip: str, port: str) -> None:
+        self._endpoint_label.setText(f"{ip}:{port}")

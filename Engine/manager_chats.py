@@ -299,15 +299,8 @@ class LlamaChatManager:
         details: list[tuple[str, str]] = []
         settings = load_settings_fresh()
         general_preamble = settings.get("tool_preamble_general") or ""
-        cards_preamble = settings.get("tool_preamble_cards") or ""
         if general_preamble:
             details.append(("tool_preamble_general", general_preamble))
-        if cards_preamble and any(
-            (schema.get("function") or {}).get("name", "").startswith(f"{INTERNAL_MCP_NAME}.")
-            for schema in self._tool_schemas
-            if isinstance(schema, dict)
-        ):
-            details.append(("tool_preamble_cards", cards_preamble))
         for server_name, instructions in self._tool_server_instructions.items():
             if instructions:
                 details.append((f"{server_name}.instructions", instructions))
@@ -378,7 +371,7 @@ class LlamaChatManager:
                 result = executor.execute(call)
             except Exception as exc:
                 result = {"error": str(exc)}
-            if call.name == f"{INTERNAL_MCP_NAME}.CreateCard":
+            if call.name.startswith(f"{INTERNAL_MCP_NAME}.") and call.name.endswith(".CreateCard"):
                 guid = None
                 if isinstance(result, str):
                     guid = result
@@ -483,17 +476,15 @@ class LlamaChatManager:
 
         internal_url = f"http://{INTERNAL_MCP_HOST}:{INTERNAL_MCP_PORT}/mcp"
         built_in = settings.get("built_in_mcps", {})
-        if isinstance(built_in, dict):
-            internal_state = built_in.get(INTERNAL_MCP_NAME)
-            if internal_state is None:
-                internal_state = built_in.get("svg_card", {})
-        else:
-            internal_state = {}
-        internal_enabled = bool(internal_state.get("enabled", True))
-        self._internal_tools_enabled = internal_enabled
+        if not isinstance(built_in, dict):
+            built_in = {}
+
+        internal_state = built_in.get(INTERNAL_MCP_NAME, {})
+        internal_master_enabled = bool(internal_state.get("enabled", True))
+        self._internal_tools_enabled = internal_master_enabled
         internal_manager: MCPClientManager | None = None
         internal_tools: list = []
-        if internal_enabled:
+        if internal_master_enabled:
             try:
                 internal_manager = MCPClientManager(internal_url)
                 internal_tools = internal_manager.list_tools(timeout=timeout)
@@ -516,6 +507,15 @@ class LlamaChatManager:
             if not base_name:
                 continue
             tool_name = f"{INTERNAL_MCP_NAME}.{base_name}"
+            if "." in base_name:
+                mcp_name = base_name.split(".", 1)[0]
+            else:
+                mcp_name = INTERNAL_MCP_NAME
+            module_state = built_in.get(mcp_name)
+            if module_state is None and mcp_name == "mcp_card_svg":
+                module_state = built_in.get("card_svg") or built_in.get("svg_card")
+            module_enabled = bool(module_state.get("enabled", True)) if isinstance(module_state, dict) else True
+            internal_enabled = internal_master_enabled and module_enabled
             schema = {
                 "type": "function",
                 "function": {
@@ -596,7 +596,6 @@ class LlamaChatManager:
             return
         settings = load_settings_fresh()
         general_preamble = settings.get("tool_preamble_general") or ""
-        cards_preamble = settings.get("tool_preamble_cards") or ""
         instruction_lines = []
         for server_name, instructions in self._tool_server_instructions.items():
             if instructions:
@@ -604,12 +603,6 @@ class LlamaChatManager:
         combined_parts: list[str] = []
         if general_preamble:
             combined_parts.append(general_preamble)
-        if cards_preamble and any(
-            (schema.get("function") or {}).get("name", "").startswith(f"{INTERNAL_MCP_NAME}.")
-            for schema in self._tool_schemas
-            if isinstance(schema, dict)
-        ):
-            combined_parts.append(cards_preamble)
         combined_preamble = "\n\n".join(part for part in combined_parts if part)
         if instruction_lines:
             header = "MCP server instructions:"
@@ -629,20 +622,25 @@ class LlamaChatManager:
         self._tool_system_added = True
 
     def _set_internal_drawcard_enabled(self, enabled: bool) -> None:
-        tool = self._tool_registry.get(f"{INTERNAL_MCP_NAME}.DrawCard")
-        if tool is None:
+        if self._tool_registry is None:
             return
-        if not self._internal_tools_enabled:
-            if tool.enabled:
-                tool.enabled = False
-                self._tool_schemas = self._tool_registry.list_tools()
-                self._ensure_tool_system_message()
-            return
-        if tool.enabled:
-            return
-        tool.enabled = True
-        self._tool_schemas = self._tool_registry.list_tools()
-        self._ensure_tool_system_message()
+        changed = False
+        for tool in self._tool_registry.list_definitions():
+            name = tool.name
+            if not name.startswith(f"{INTERNAL_MCP_NAME}.") or not name.endswith(".DrawCard"):
+                continue
+            if not self._internal_tools_enabled:
+                if tool.enabled:
+                    tool.enabled = False
+                    changed = True
+                continue
+            if tool.enabled == enabled:
+                continue
+            tool.enabled = enabled
+            changed = True
+        if changed:
+            self._tool_schemas = self._tool_registry.list_tools()
+            self._ensure_tool_system_message()
 
     def _get_chat_template(self) -> str | None:
         model_name = _fetch_loaded_model()
