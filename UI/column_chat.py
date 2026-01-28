@@ -4,11 +4,10 @@ import json
 from pathlib import Path
 from typing import Callable, Iterable
 
-import importlib.util
-
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from Engine.logger import get_logger
+from App.chat_controller import ChatController
 from UI.column_chat_messages import MessageType, MessageBubble, create_message_widget
 from constants import SHOW_SAMPLE_MESSAGES, TOGGLE_OFF_COLOR, TOGGLE_ON_COLOR
 
@@ -82,36 +81,16 @@ class AttachmentsBar(QtWidgets.QFrame):
                 widget.deleteLater()
 
 
-class ChatColumnWidget(QtWidgets.QWidget):
-    model_state_updated = QtCore.pyqtSignal(str)
-    stream_chunk_received = QtCore.pyqtSignal(str)
-    stream_completed = QtCore.pyqtSignal()
-    tool_call_received = QtCore.pyqtSignal(object)
-    tool_result_received = QtCore.pyqtSignal(object, object)
-    followup_reply_started = QtCore.pyqtSignal()
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._logger = get_logger(self)
-        self._llama_module = None
-        self._chat_server = None
-        self._current_receive: MessageBubble | None = None
-        self._current_receive_pending = False
-        self._availability_callbacks: list[Callable[[str], None]] = []
-        self._availability_hooked = False
-        self._pending_availability: str | None = None
-        self._last_availability: str | None = None
-
-        self.model_state_updated.connect(self._update_input_state)
-        self.stream_chunk_received.connect(self._append_stream_chunk)
-        self.stream_completed.connect(self._finalize_stream_message)
-        self.tool_call_received.connect(self._on_tool_call)
-        self.tool_result_received.connect(self._on_tool_result)
-        self.followup_reply_started.connect(self._on_followup_reply_started)
-
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+class ChatColumnWidgets:
+    def __init__(
+        self,
+        parent: QtWidgets.QWidget,
+        on_auto_scroll_toggled: Callable[[bool], None],
+        on_send_clicked: Callable[[], None],
+    ) -> None:
+        self.layout = QtWidgets.QVBoxLayout(parent)
+        self.layout.setContentsMargins(8, 8, 8, 8)
+        self.layout.setSpacing(8)
 
         caption_row = QtWidgets.QHBoxLayout()
         caption_row.setContentsMargins(0, 0, 0, 0)
@@ -123,83 +102,120 @@ class ChatColumnWidget(QtWidgets.QWidget):
 
         caption_row.addStretch(1)
 
-        self._auto_scroll_toggle = QtWidgets.QToolButton()
-        self._auto_scroll_toggle.setText("Auto-scroll")
-        self._auto_scroll_toggle.setCheckable(True)
-        self._auto_scroll_toggle.setChecked(True)
-        self._auto_scroll_toggle.setStyleSheet(
+        self.auto_scroll_toggle = QtWidgets.QToolButton()
+        self.auto_scroll_toggle.setText("Auto-scroll")
+        self.auto_scroll_toggle.setCheckable(True)
+        self.auto_scroll_toggle.setChecked(True)
+        self.auto_scroll_toggle.setStyleSheet(
             f"QToolButton {{ background: {TOGGLE_OFF_COLOR}; padding: 4px; }}"
             f"QToolButton:checked {{ background: {TOGGLE_ON_COLOR}; }}"
         )
-        self._auto_scroll_toggle.toggled.connect(self._on_auto_scroll_toggled)
-        caption_row.addWidget(self._auto_scroll_toggle)
+        self.auto_scroll_toggle.toggled.connect(on_auto_scroll_toggled)
+        caption_row.addWidget(self.auto_scroll_toggle)
 
-        layout.addLayout(caption_row)
+        self.layout.addLayout(caption_row)
 
-        self._history_container = QtWidgets.QWidget()
-        self._history_layout = QtWidgets.QVBoxLayout(self._history_container)
-        self._history_layout.setContentsMargins(8, 8, 8, 8)
-        self._history_layout.setSpacing(8)
-        self._history_layout.addStretch(1)
+        self.history_container = QtWidgets.QWidget()
+        self.history_layout = QtWidgets.QVBoxLayout(self.history_container)
+        self.history_layout.setContentsMargins(8, 8, 8, 8)
+        self.history_layout.setSpacing(8)
+        self.history_layout.addStretch(1)
 
-        self._history_scroll = QtWidgets.QScrollArea()
-        self._history_scroll.setWidgetResizable(True)
-        self._history_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._history_scroll.setStyleSheet("background-color: #dff4d8; border: 1px dashed #999;")
-        self._history_scroll.setWidget(self._history_container)
-        self._history_scroll.setSizePolicy(
+        self.history_scroll = QtWidgets.QScrollArea()
+        self.history_scroll.setWidgetResizable(True)
+        self.history_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.history_scroll.setStyleSheet("background-color: #dff4d8; border: 1px dashed #999;")
+        self.history_scroll.setWidget(self.history_container)
+        self.history_scroll.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Expanding,
         )
-        layout.addWidget(self._history_scroll, 1)
+        self.layout.addWidget(self.history_scroll, 1)
 
-        layout.addSpacing(8)
+        self.layout.addSpacing(8)
 
-        entry_panel = QtWidgets.QFrame()
-        entry_panel.setStyleSheet("QFrame { border: none; background: transparent; }")
-        entry_panel.setSizePolicy(
+        self.entry_panel = QtWidgets.QFrame()
+        self.entry_panel.setStyleSheet("QFrame { border: none; background: transparent; }")
+        self.entry_panel.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Minimum,
         )
 
-        entry_layout = QtWidgets.QHBoxLayout(entry_panel)
+        entry_layout = QtWidgets.QHBoxLayout(self.entry_panel)
         entry_layout.setContentsMargins(0, 0, 0, 0)
         entry_layout.setSpacing(8)
 
-        self._prompt_box = ChatInputBox()
-        self._prompt_box.setPlaceholderText("Type a message...")
-        self._prompt_box.setEnabled(False)
-        self._prompt_box.setStyleSheet("QTextEdit { border: 2px solid #000; }")
-        self._prompt_box.sendRequested.connect(self._on_send_clicked)
-        self._prompt_box.setSizePolicy(
+        self.prompt_box = ChatInputBox()
+        self.prompt_box.setPlaceholderText("Type a message...")
+        self.prompt_box.setEnabled(False)
+        self.prompt_box.setStyleSheet("QTextEdit { border: 2px solid #000; }")
+        self.prompt_box.sendRequested.connect(on_send_clicked)
+        self.prompt_box.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Minimum,
         )
 
-        self._send_button = QtWidgets.QPushButton("Send")
-        self._send_button.setFixedWidth(80)
-        self._send_button.setEnabled(False)
-        self._send_button.clicked.connect(self._on_send_clicked)
+        self.send_button = QtWidgets.QPushButton("Send")
+        self.send_button.setFixedWidth(80)
+        self.send_button.setEnabled(False)
+        self.send_button.clicked.connect(on_send_clicked)
 
-        entry_layout.addWidget(self._prompt_box, 1)
-        entry_layout.addWidget(self._send_button)
+        entry_layout.addWidget(self.prompt_box, 1)
+        entry_layout.addWidget(self.send_button)
 
-        self._attachments_bar = AttachmentsBar()
+        self.attachments_bar = AttachmentsBar()
 
-        bottom_panel = QtWidgets.QFrame()
-        bottom_panel.setStyleSheet("QFrame { background: #fff3a6; }")
-        bottom_panel.setSizePolicy(
+        self.bottom_panel = QtWidgets.QFrame()
+        self.bottom_panel.setStyleSheet("QFrame { background: #fff3a6; }")
+        self.bottom_panel.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Minimum,
         )
-        bottom_layout = QtWidgets.QVBoxLayout(bottom_panel)
+        bottom_layout = QtWidgets.QVBoxLayout(self.bottom_panel)
         bottom_layout.setContentsMargins(8, 8, 8, 8)
         bottom_layout.setSpacing(8)
         bottom_layout.setSizeConstraint(QtWidgets.QLayout.SizeConstraint.SetMinimumSize)
-        bottom_layout.addWidget(entry_panel)
-        bottom_layout.addWidget(self._attachments_bar)
+        bottom_layout.addWidget(self.entry_panel)
+        bottom_layout.addWidget(self.attachments_bar)
 
-        layout.addWidget(bottom_panel)
+        self.layout.addWidget(self.bottom_panel)
+
+
+class ChatColumnWidget(QtWidgets.QWidget):
+    model_state_updated = QtCore.pyqtSignal(str)
+    stream_chunk_received = QtCore.pyqtSignal(str)
+    stream_completed = QtCore.pyqtSignal()
+    tool_call_received = QtCore.pyqtSignal(object)
+    tool_result_received = QtCore.pyqtSignal(object, object)
+    followup_reply_started = QtCore.pyqtSignal()
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._logger = get_logger(self)
+        self._chat_controller = ChatController(self._logger)
+        self._current_receive: MessageBubble | None = None
+        self._current_receive_pending = False
+        self._availability_callbacks: list[Callable[[str], None]] = []
+        self._availability_hooked = False
+        self._pending_availability: str | None = None
+        self._last_availability: str | None = None
+        self._pending_autorun_submit = False
+
+        self.model_state_updated.connect(self._update_input_state)
+        self.stream_chunk_received.connect(self._append_stream_chunk)
+        self.stream_completed.connect(self._finalize_stream_message)
+        self.tool_call_received.connect(self._on_tool_call)
+        self.tool_result_received.connect(self._on_tool_result)
+        self.followup_reply_started.connect(self._on_followup_reply_started)
+
+        self._widgets = ChatColumnWidgets(self, self._on_auto_scroll_toggled, self._on_send_clicked)
+        self._auto_scroll_toggle = self._widgets.auto_scroll_toggle
+        self._history_container = self._widgets.history_container
+        self._history_layout = self._widgets.history_layout
+        self._history_scroll = self._widgets.history_scroll
+        self._prompt_box = self._widgets.prompt_box
+        self._send_button = self._widgets.send_button
+        self._attachments_bar = self._widgets.attachments_bar
 
         if SHOW_SAMPLE_MESSAGES:
             self._add_sample_messages()
@@ -271,44 +287,18 @@ class ChatColumnWidget(QtWidgets.QWidget):
         )
 
     def _register_model_state(self) -> None:
-        module_path = Path(__file__).parent.parent / "Engine" / "manager_models.py"
-        spec = importlib.util.spec_from_file_location("manager_models", module_path)
-        if spec is None or spec.loader is None:
-            self._logger.error("Failed to load llamacpp-server module")
+        registered = self._chat_controller.register_callbacks(
+            self._on_stream_chunk,
+            self._on_stream_end,
+            self._on_tool_call_callback,
+            self._on_tool_result_callback,
+            self._on_followup_callback,
+            self._on_model_state,
+        )
+        if not registered:
             return
-        import sys
-        model_module = sys.modules.get(spec.name)
-        if model_module is None:
-            model_module = importlib.util.module_from_spec(spec)
-            sys.modules[spec.name] = model_module
-            spec.loader.exec_module(model_module)
-
-        self._llama_module = model_module
-
-        chat_module_path = Path(__file__).parent.parent / "Engine" / "manager_chats.py"
-        chat_spec = importlib.util.spec_from_file_location("manager_chats", chat_module_path)
-        if chat_spec is None or chat_spec.loader is None:
-            self._logger.error("Failed to load chat manager module")
-            return
-        chat_module = sys.modules.get(chat_spec.name)
-        if chat_module is None:
-            chat_module = importlib.util.module_from_spec(chat_spec)
-            sys.modules[chat_spec.name] = chat_module
-            chat_spec.loader.exec_module(chat_module)
-
-        try:
-            self._chat_server = chat_module.LlamaChatManager()
-            self._chat_server.register_stream_callback(self._on_stream_chunk)
-            self._chat_server.register_stream_end_callback(self._on_stream_end)
-            self._chat_server.register_tool_call_callback(self._on_tool_call_callback)
-            self._chat_server.register_tool_result_callback(self._on_tool_result_callback)
-            self._chat_server.register_followup_callback(self._on_followup_callback)
-            self._chat_server.register_availability_callback(self._on_chat_availability)
+        if self._chat_controller.register_availability_callback(self._on_chat_availability):
             self._availability_hooked = True
-        except Exception as exc:
-            self._logger.exception("Failed to initialize chat server: %s", exc)
-            self._chat_server = None
-        model_module.register_model_state_callback(self._on_model_state)
 
     def _on_model_state(self, state: str, _model_name: str | None) -> None:
         self.model_state_updated.emit(state)
@@ -317,6 +307,10 @@ class ChatColumnWidget(QtWidgets.QWidget):
         ready = state == "Ready"
         self._prompt_box.setEnabled(ready)
         self._send_button.setEnabled(ready)
+        if ready and self._pending_autorun_submit:
+            self._logger.info("Autorun submit released after send enabled")
+            self._pending_autorun_submit = False
+            self._send_button.click()
         if ready and self._pending_availability == "AVAILABLE":
             self._logger.info("Autorun availability released after send enabled")
             self._pending_availability = None
@@ -339,13 +333,13 @@ class ChatColumnWidget(QtWidgets.QWidget):
                 continue
 
     def register_availability_callback(self, callback: Callable[[str], None]) -> bool:
-        if self._chat_server is None:
+        if self._chat_controller.chat_server is None:
             self._logger.warning("Availability callback registration failed: chat server not initialized")
             return False
         self._availability_callbacks.append(callback)
         if not self._availability_hooked:
-            self._chat_server.register_availability_callback(self._on_chat_availability)
-            self._availability_hooked = True
+            if self._chat_controller.register_availability_callback(self._on_chat_availability):
+                self._availability_hooked = True
         if self._last_availability == "AVAILABLE" and not self._send_button.isEnabled():
             self._pending_availability = "AVAILABLE"
         elif self._last_availability:
@@ -373,20 +367,17 @@ class ChatColumnWidget(QtWidgets.QWidget):
 
     def autorun_submit_message(self) -> None:
         if not self._send_button.isEnabled():
-            self._logger.warning("Autorun submit blocked: Send button disabled")
+            self._logger.warning("Autorun submit deferred: Send button disabled")
+            self._pending_autorun_submit = True
             return
         self._logger.info("Autorun submitting message via Send button")
         self._send_button.click()
 
     def get_last_assistant_message(self) -> str:
-        if self._chat_server is None:
-            return ""
-        return self._chat_server.get_last_assistant_message()
+        return self._chat_controller.get_last_assistant_message()
 
     def refresh_mcp_tools(self) -> None:
-        if self._chat_server is None:
-            return
-        self._chat_server.reload_mcp_tools()
+        self._chat_controller.reload_mcp_tools()
 
     def _on_send_clicked(self) -> None:
         text = self._prompt_box.toPlainText().strip()
@@ -394,8 +385,8 @@ class ChatColumnWidget(QtWidgets.QWidget):
             return
         attachments = self._attachments_bar.get_paths()
         tool_names: list[str] = []
-        if self._chat_server is not None:
-            tool_names = self._chat_server.get_user_tool_names()
+        if self._chat_controller.chat_server is not None:
+            tool_names = self._chat_controller.get_user_tool_names()
         tools_csv = ", ".join(tool_names) if tool_names else "none"
         user_details = [("tools", tools_csv)]
 
@@ -417,10 +408,10 @@ class ChatColumnWidget(QtWidgets.QWidget):
         self._prompt_box.clear()
         self._attachments_bar.clear()
 
-        if self._chat_server is None:
+        if self._chat_controller.chat_server is None:
             self._logger.warning("Chat server not initialized")
             return
-        self._chat_server.send_message(text, image_paths=attachments)
+        self._chat_controller.send_message(text, attachments)
 
     def _on_stream_chunk(self, chunk: str) -> None:
         self.stream_chunk_received.emit(chunk)
@@ -504,9 +495,7 @@ class ChatColumnWidget(QtWidgets.QWidget):
         self._add_message(receive_widget)
 
     def _add_tools_advertisement(self) -> None:
-        if self._chat_server is None:
-            return
-        payload = self._chat_server.get_tools_advertisement()
+        payload = self._chat_controller.get_tools_advertisement()
         if not payload:
             return
         content, details = payload

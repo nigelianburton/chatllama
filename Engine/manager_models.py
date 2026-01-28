@@ -1,40 +1,38 @@
 from __future__ import annotations
 
-import base64
 import json
-import mimetypes
 import os
-import subprocess
 import threading
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import sys
-import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional
 
 from Engine.logger import get_logger
-from Tools.mcp_client_manager import MCPClientManager
-from Tools.tool_executor import ToolExecutor
-from Tools.tool_protocol_base import ToolCall
-from Tools.tool_protocol_selector import select_adapter
-from Tools.tool_registry import ToolDefinition, ToolRegistry
+from Engine.manager_models_processcontrol import (
+    ensure_running,
+    get_models_response,
+    is_router_mode,
+    is_running,
+    launch_server,
+    stop_server,
+    wait_for_health,
+)
+from Engine.manager_models_settings import (
+    load_settings as _load_settings,
+    load_settings_fresh,
+    save_settings as _save_settings,
+    get_models_preset_path as _get_models_preset_path,
+    write_models_preset as _write_models_preset,
+    find_mmproj_path as _find_mmproj_path,
+    update_default_model as _update_default_model,
+)
 from constants import (
-    DEFAULT_MODEL_FILE,
-    DEFAULT_MMPROJ_FILE,
-    DEFAULT_TOOL_PREAMBLE_GENERAL,
     GGUF_MODELS_DIR,
-    LLAMA_CPP_MODEL_INIT_FILE,
-    LLAMA_SERVER_EXE,
     LLAMA_SERVER_HOST,
     LLAMA_SERVER_PORT,
-    PEPPER_SETTINGS_FILE,
-    SETTINGS_DEV,
-    SETTINGS_HOME,
-    SETTINGS_WORK,
 )
 
 
@@ -53,194 +51,10 @@ _state_thread_started = False
 _cached_models: list[ModelInfo] | None = None
 _cached_loaded_model: Optional[str] = None
 _cached_state: Optional[tuple[str, Optional[str]]] = None
-_settings_data: dict | None = None
-_settings_path: Path | None = None
-_models_preset_path: Path | None = None
 _active_model: Optional[str] = None
-_launch_lock = threading.Lock()
-_launch_in_progress = False
 _init_lock = threading.Lock()
 _init_in_progress = False
 _init_complete = False
-
-
-def is_running() -> bool:
-    """Return True if llama-server responds to /health (200 or 503)."""
-    url = f"http://{LLAMA_SERVER_HOST}:{LLAMA_SERVER_PORT}/health"
-    try:
-        _logger.info("Checking llama-server health: %s", url)
-        with urllib.request.urlopen(url, timeout=1.5) as response:
-            if response.status in (200, 503):
-                _logger.info("llama-server health responded with %s", response.status)
-                return True
-            body = response.read().decode("utf-8")
-            try:
-                data = json.loads(body)
-                ok = data.get("status") == "ok" or data.get("error") is not None
-                _logger.info("llama-server health JSON ok=%s", ok)
-                return ok
-            except json.JSONDecodeError:
-                _logger.info("llama-server health returned non-JSON response")
-                return False
-    except urllib.error.HTTPError as err:
-        _logger.info("llama-server health HTTPError: %s", err.code)
-        return err.code == 503
-    except Exception as exc:
-        _logger.info("llama-server health check failed: %s", exc)
-        return False
-
-
-def launch_server() -> Optional[subprocess.Popen]:
-    """Launch llama-server if not running. Returns process or None on failure."""
-    try:
-        preset_path = _get_models_preset_path()
-        _logger.info(
-            "Launching llama-server (router): %s --models-preset %s --host %s --port %s",
-            LLAMA_SERVER_EXE,
-            preset_path,
-            LLAMA_SERVER_HOST,
-            LLAMA_SERVER_PORT,
-        )
-        process = subprocess.Popen(
-            [
-                LLAMA_SERVER_EXE,
-                "--models-preset",
-                str(preset_path),
-                "--host",
-                LLAMA_SERVER_HOST,
-                "--port",
-                str(LLAMA_SERVER_PORT),
-            ]
-        )
-        _logger.info("llama-server launch started (pid=%s)", process.pid)
-        return process
-    except Exception as exc:
-        _logger.exception("Failed to launch llama-server: %s", exc)
-        return None
-
-
-def ensure_running() -> bool:
-    _logger.info("Ensure llama-server running")
-    if not _ensure_single_llama_process():
-        return False
-    if is_running():
-        if not is_router_mode():
-            _logger.info("llama-server running in non-router mode; restarting")
-            stop_server()
-        else:
-            _logger.info("llama-server already running")
-            return True
-    with _launch_lock:
-        global _launch_in_progress
-        if _launch_in_progress:
-            _logger.warning("llama-server launch already in progress; skipping duplicate launch")
-            return _wait_for_health()
-        _launch_in_progress = True
-    _logger.info("llama-server not running; launching")
-    process = launch_server()
-    if process is None:
-        _logger.info("llama-server launch failed")
-        with _launch_lock:
-            _launch_in_progress = False
-        return False
-    _logger.info("llama-server launch process started")
-    if _wait_for_health():
-        with _launch_lock:
-            _launch_in_progress = False
-        return True
-    _logger.info("llama-server failed to become healthy after launch")
-    with _launch_lock:
-        _launch_in_progress = False
-    return False
-
-
-def _get_llama_server_pids() -> list[str]:
-    if sys.platform != "win32":
-        return []
-    try:
-        output = subprocess.check_output(
-            [
-                "powershell",
-                "-Command",
-                "Get-Process -Name llama-server -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id",
-            ],
-            text=True,
-        )
-    except Exception:
-        return []
-    return [line.strip() for line in output.splitlines() if line.strip()]
-
-
-def _ensure_single_llama_process() -> bool:
-    if sys.platform != "win32":
-        return True
-    pids = _get_llama_server_pids()
-    if not pids:
-        _logger.info("llama-server discovery: no running processes found")
-        return True
-    if len(pids) == 1:
-        _logger.info("llama-server discovery: one running process found (pid=%s)", pids[0])
-        return True
-    _logger.warning("llama-server discovery: %s running processes found (pids=%s)", len(pids), ", ".join(pids))
-    try:
-        from PyQt6 import QtCore, QtWidgets
-    except Exception:
-        _logger.warning("PyQt unavailable; stopping all llama-server processes")
-        stop_server()
-        return True
-    app = QtWidgets.QApplication.instance()
-    if app is None:
-        _logger.warning("No QApplication; stopping all llama-server processes")
-        stop_server()
-        return True
-
-    def _show_dialog() -> QtWidgets.QMessageBox.StandardButton:
-        message = QtWidgets.QMessageBox()
-        message.setWindowTitle("Error")
-        message.setIcon(QtWidgets.QMessageBox.Icon.Warning)
-        message.setText(f"Error {len(pids)} llama-servers are running.")
-        message.setInformativeText("Stop them ?")
-        message.setTextFormat(QtCore.Qt.TextFormat.PlainText)
-        message.setStandardButtons(
-            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No
-        )
-        message.setStyleSheet("QLabel { color: #000000; }")
-        return QtWidgets.QMessageBox.StandardButton(message.exec())
-
-    if QtCore.QThread.currentThread() != app.thread():
-        result_box: dict[str, QtWidgets.QMessageBox.StandardButton | None] = {"result": None}
-
-        class _DialogRunner(QtCore.QObject):
-            @QtCore.pyqtSlot()
-            def run(self) -> None:
-                result_box["result"] = _show_dialog()
-
-        runner = _DialogRunner()
-        runner.moveToThread(app.thread())
-        QtCore.QMetaObject.invokeMethod(
-            runner,
-            "run",
-            QtCore.Qt.ConnectionType.BlockingQueuedConnection,
-        )
-        result = result_box["result"] or QtWidgets.QMessageBox.StandardButton.No
-    else:
-        result = _show_dialog()
-    if result == QtWidgets.QMessageBox.StandardButton.Yes:
-        _logger.info("User chose to stop multiple llama-server processes")
-        stop_server()
-        remaining = _get_llama_server_pids()
-        if remaining:
-            _logger.error(
-                "llama-server processes still running after stop request (count=%s, pids=%s)",
-                len(remaining),
-                ", ".join(remaining),
-            )
-            return False
-        _logger.info("llama-server processes cleared after stop request")
-        return True
-    _logger.info("User chose not to stop multiple llama-server processes; exiting app")
-    app.quit()
-    return False
 
 
 def register_models_callback(callback: Callable[[list[ModelInfo], Optional[str]], None]) -> None:
@@ -349,7 +163,7 @@ def _initialize_server_and_models() -> None:
         stop_server()
 
         process = launch_server()
-        if process is None or not _wait_for_health():
+        if process is None or not wait_for_health():
             _emit_state("Fault", None)
             return
 
@@ -423,61 +237,8 @@ def get_discovered_models() -> list[ModelInfo]:
     return _discover_models()
 
 
-def is_router_mode() -> bool:
-    status, data = _get_models_response()
-    return status == 200 and isinstance(data.get("data"), list)
-
-
-def stop_server() -> None:
-    if sys.platform == "win32":
-        pids = _get_llama_server_pids()
-        if pids:
-            _logger.info("Stopping llama-server processes (pids=%s)", ", ".join(pids))
-        else:
-            _logger.info("Stopping llama-server processes (none found)")
-    else:
-        _logger.info("Stopping llama-server processes")
-    if sys.platform == "win32":
-        result = subprocess.run(
-            [
-                "powershell",
-                "-Command",
-                "Get-Process llama-server -ErrorAction SilentlyContinue | Stop-Process -Force",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if result.stdout:
-            _logger.info("llama-server stop stdout: %s", result.stdout.strip())
-        if result.stderr:
-            _logger.warning("llama-server stop stderr: %s", result.stderr.strip())
-    else:
-        result = subprocess.run(["pkill", "-f", "llama-server"], check=False, capture_output=True, text=True)
-        if result.stdout:
-            _logger.info("llama-server stop stdout: %s", result.stdout.strip())
-        if result.stderr:
-            _logger.warning("llama-server stop stderr: %s", result.stderr.strip())
-
-
-def _get_models_response() -> tuple[int, dict]:
-    url = f"http://{LLAMA_SERVER_HOST}:{LLAMA_SERVER_PORT}/models"
-    try:
-        with urllib.request.urlopen(url, timeout=2) as response:
-            body = response.read().decode("utf-8")
-        return 200, json.loads(body) if body else {}
-    except urllib.error.HTTPError as err:
-        try:
-            body = err.read().decode("utf-8")
-            return err.code, json.loads(body) if body else {}
-        except Exception:
-            return err.code, {}
-    except Exception:
-        return 0, {}
-
-
 def _fetch_models_from_server() -> list[ModelInfo]:
-    status, data = _get_models_response()
+    status, data = get_models_response()
     if status != 200:
         return []
     results: list[ModelInfo] = []
@@ -538,7 +299,7 @@ def _get_model_state() -> tuple[str, Optional[str]]:
 
 
 def _get_active_model_status() -> str:
-    status, data = _get_models_response()
+    status, data = get_models_response()
     if status != 200:
         return "Fault"
     target = (_active_model or "").lower()
@@ -655,14 +416,6 @@ def _refresh_model_state(state: str) -> None:
             continue
 
 
-def _update_default_model(model_name: str) -> None:
-    if not model_name:
-        return
-    settings = _load_settings()
-    settings["default_model"] = model_name
-    _save_settings(settings)
-
-
 def _backfill_model_cache_async(models: list[ModelInfo]) -> None:
     names = [model.name for model in models if model.name]
 
@@ -743,65 +496,6 @@ def _ensure_default_model_loaded(models: list[ModelInfo]) -> None:
     except Exception:
         _logger.info("Default model load failed for %s", model_ref)
 
-
-def _load_settings() -> dict:
-    global _settings_data, _settings_path
-    if _settings_data is not None and _settings_path is not None:
-        return _settings_data
-
-    candidates = [
-        Path(SETTINGS_DEV) / PEPPER_SETTINGS_FILE,
-        Path(SETTINGS_WORK) / PEPPER_SETTINGS_FILE,
-        Path(SETTINGS_HOME) / PEPPER_SETTINGS_FILE,
-    ]
-    for path in candidates:
-        if path.exists():
-            _settings_path = path
-            break
-    if _settings_path is None:
-        _settings_path = candidates[0]
-        _settings_path.parent.mkdir(parents=True, exist_ok=True)
-        _settings_data = {
-            "settings_folder": str(_settings_path.parent),
-            "default_model": DEFAULT_MODEL_FILE,
-            "model_cache": {},
-        }
-        _save_settings(_settings_data)
-        return _settings_data
-
-    try:
-        _settings_data = json.loads(_settings_path.read_text())
-    except Exception:
-        _settings_data = {}
-
-    _settings_data.setdefault("settings_folder", str(_settings_path.parent))
-    _settings_data.setdefault("default_model", DEFAULT_MODEL_FILE)
-    if not _settings_data.get("tool_preamble_general"):
-        _settings_data["tool_preamble_general"] = DEFAULT_TOOL_PREAMBLE_GENERAL
-        _save_settings(_settings_data)
-    if "tool_preamble_cards" in _settings_data:
-        _settings_data.pop("tool_preamble_cards", None)
-        _save_settings(_settings_data)
-    _settings_data.setdefault("model_cache", {})
-    return _settings_data
-
-
-def load_settings_fresh() -> dict:
-    global _settings_data, _settings_path
-    _settings_data = None
-    _settings_path = None
-    return _load_settings()
-
-
-def _save_settings(settings: dict) -> None:
-    if _settings_path is None:
-        return
-    try:
-        _settings_path.write_text(json.dumps(settings, indent=2))
-    except Exception as exc:
-        _logger.warning("Failed to write settings cache: %s", exc)
-
-
 def generate_models_preset_async(models: list[ModelInfo]) -> Path:
     preset_path = _get_models_preset_path()
 
@@ -812,72 +506,11 @@ def generate_models_preset_async(models: list[ModelInfo]) -> Path:
     thread.start()
     return preset_path
 
-
-def _get_models_preset_path() -> Path:
-    global _models_preset_path
-    if _models_preset_path is not None:
-        return _models_preset_path
-    settings = _load_settings()
-    settings_folder = Path(settings.get("settings_folder", SETTINGS_DEV))
-    _models_preset_path = settings_folder / LLAMA_CPP_MODEL_INIT_FILE
-    return _models_preset_path
-
-
 def _restart_router_with_preset() -> None:
     stop_server()
     generate_models_preset_async(_discover_models())
     launch_server()
-    _wait_for_health()
-
-
-def _wait_for_health(timeout_seconds: float = 60.0) -> bool:
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
-        if is_running():
-            return True
-        time.sleep(0.5)
-    return False
-
-
-def _write_models_preset(preset_path: Path, models: list[ModelInfo]) -> None:
-    try:
-        lines: list[str] = ["version = 1", "", "[*]", "", ""]
-        seen: set[str] = set()
-        for model in models:
-            name = model.name
-            if not name:
-                continue
-            section = name
-            if section in seen:
-                continue
-            seen.add(section)
-            model_path = Path(model.folder) / f"{name}.gguf"
-            if not model_path.exists():
-                model_path = Path(model.folder) / name
-            lines.append(f"[{section}]")
-            lines.append(f"model = {model_path}")
-            mmproj_path = _find_mmproj_path(Path(model.folder), name)
-            if mmproj_path:
-                lines.append(f"mmproj = {mmproj_path}")
-            lines.append("")
-        preset_path.parent.mkdir(parents=True, exist_ok=True)
-        preset_path.write_text("\n".join(lines))
-        _logger.info("Wrote models preset: %s", preset_path)
-    except Exception as exc:
-        _logger.warning("Failed to write models preset: %s", exc)
-
-
-def _find_mmproj_path(folder: Path, model_name: str) -> Optional[Path]:
-    if not folder.exists():
-        return None
-    candidates = sorted(folder.glob("*.mmproj*.gguf"))
-    if not candidates:
-        return None
-    lowered = model_name.lower()
-    for candidate in candidates:
-        if lowered in candidate.name.lower():
-            return candidate
-    return candidates[0]
+    wait_for_health()
 
 
 def _fetch_props(model_name: Optional[str]) -> dict:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import threading
 from pathlib import Path
@@ -32,6 +33,8 @@ class InternalMcpServer:
         self._ui_create_card = ui_create_card
         self._ui_delete_card = ui_delete_card
         self._cards: dict[str, SVGCard] = {}
+        self._server: Any | None = None
+        self._shutting_down = False
 
     def start(self) -> None:
         if FastMCP is None:
@@ -43,6 +46,7 @@ class InternalMcpServer:
         mcp_modules = self._load_internal_mcps()
         instructions = self._build_instructions(mcp_modules)
         server = FastMCP("chatllama-internal", instructions=instructions or None)
+        self._server = server
 
         for name, module in mcp_modules:
             register = getattr(module, "register_tools", None)
@@ -79,8 +83,28 @@ class InternalMcpServer:
         thread.start()
         self._thread = thread
 
+    def stop(self) -> None:
+        if self._shutting_down:
+            return
+        self._shutting_down = True
+        server = self._server
+        if server is None:
+            return
+
+        for attr in ("shutdown", "close", "stop"):
+            handler = getattr(server, attr, None)
+            if not callable(handler):
+                continue
+            try:
+                result = handler()
+                if asyncio.iscoroutine(result):
+                    asyncio.run(result)
+            except Exception as exc:
+                self._logger.warning("Failed to %s internal MCP server: %s", attr, exc)
+            break
+
     def _patch_sse_writer(self) -> None:
-        """Swallow ClosedResourceError when SSE clients disconnect during startup."""
+        """Guard SSE writer during shutdown to avoid noisy ClosedResourceError logs."""
         try:
             from mcp.server import streamable_http
             from anyio import ClosedResourceError

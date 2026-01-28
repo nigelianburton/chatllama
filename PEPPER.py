@@ -11,25 +11,20 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from Engine.logger import configure_logging, get_logger
-from Engine.mcp_internal_server import InternalMcpServer
 from Engine.autorun import run_autorun
 from Engine.interaction_logger import init_interaction_logger
-from Engine.utilities import Utilities, set_model_download_callback
+from App.mcp_service import start_internal_mcp
+from App.status_controller import StatusMessageController, attach_download_callback
+from App.window_controller import ExitIdleController
+from App.window_state_controller import WindowStateController
 from UI.page_main import MainPageWidget
 from MCP_Internal.card_svg import SVGCard
-from constants import (
-    HEADER_COLOR_FAULT,
-    HEADER_COLOR_LOADING,
-    HEADER_COLOR_READY,
-    SETTINGS_DEV,
-    SETTINGS_HOME,
-    SETTINGS_WORK,
-)
+from constants import SETTINGS_DEV, SETTINGS_HOME, SETTINGS_WORK
 
 SINGLE_INSTANCE_MUTEX = "ChatLlamaSingleInstance"
 SINGLE_INSTANCE_HOST = "127.0.0.1"
@@ -45,6 +40,17 @@ class UiBridge(QtCore.QObject):
     @QtCore.pyqtSlot(object)
     def invoke(self, func: Callable[[], object]) -> None:
         self.last_result = func()
+
+
+class _LegacyLayoutAdapter:
+    def invoke_ui(self, window, func: Callable[[], object]) -> object:
+        return window._invoke_ui(func)
+
+    def get_mcp_hooks(self, window):
+        return window._invoke_ui, window._create_svg_card, window._delete_svg_card
+
+    def refresh_mcp_tools(self, window) -> None:
+        window._chat_container.refresh_mcp_tools()
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -148,13 +154,20 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
     def __init__(self, exit_idle: bool, log_file: Path, settings_folder: Path) -> None:
         super().__init__()
         self._logger = get_logger(self)
-        self._mcp_server: InternalMcpServer | None = None
+        self._mcp_server: object | None = None
         self._exit_idle = exit_idle
         self._log_file = log_file
         self._cards: Dict[str, SVGCard] = {}
         self._ui_bridge = UiBridge()
-        self._pending_description_thread: Optional[threading.Thread] = None
-        self._pending_description_thread: Optional[threading.Thread] = None
+        self._layout_adapter = _LegacyLayoutAdapter()
+        self._exit_controller = ExitIdleController(
+            log_file=self._log_file,
+            schedule_timer=lambda delay_ms, func: QtCore.QTimer.singleShot(delay_ms, func),
+            quit_app=self._quit_app,
+            get_widget=lambda: self,
+            get_cards=lambda: list(self._cards.values()),
+            logger=self._logger,
+        )
 
         self.setWindowTitle("ChatLlama - SIMPLE")
         self.resize(1200, 800)
@@ -165,59 +178,37 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
         self._model_title = self._page.model_title_label
         self._status_text = self._page.status_label
         self._progress = self._page.progress_bar
+        self._status_controller = StatusMessageController(
+            get_text=self._model_title.text,
+            set_text=self._model_title.setText,
+            schedule_timer=lambda delay_ms, func: QtCore.QTimer.singleShot(delay_ms, func),
+            logger=self._logger,
+        )
+        self._state_controller = WindowStateController(
+            set_model_title=self._model_title.setText,
+            set_progress_range=self._progress.setRange,
+            set_progress_value=self._progress.setValue,
+            set_header_color=self._set_column_header_color,
+            logger=self._logger,
+        )
 
         self._settings_container = self._page.settings_container
-        self._settings_container.model_state_updated.connect(self._on_model_state_updated)
-        self._settings_container.model_load_started.connect(self._on_model_load_started)
-        self._settings_container.model_load_finished.connect(self._on_model_load_finished)
-        self._settings_container.cache_warm_started.connect(self._on_cache_warm_started)
-        self._settings_container.cache_warm_finished.connect(self._on_cache_warm_finished)
-        self._settings_container.model_changed.connect(self._on_model_changed)
+        self._settings_container.model_state_updated.connect(self._state_controller.on_model_state_updated)
+        self._settings_container.model_load_started.connect(self._state_controller.on_model_load_started)
+        self._settings_container.model_load_finished.connect(self._state_controller.on_model_load_finished)
+        self._settings_container.cache_warm_started.connect(self._state_controller.on_cache_warm_started)
+        self._settings_container.cache_warm_finished.connect(self._state_controller.on_cache_warm_finished)
+        self._settings_container.model_changed.connect(self._state_controller.on_model_changed)
 
         self._chat_container = self._page.chat_container
         self._settings_container.mcp_settings_changed.connect(self._chat_container.refresh_mcp_tools)
-        self._chat_container.model_state_updated.connect(self._on_model_state_updated)
+        self._chat_container.model_state_updated.connect(self._state_controller.on_model_state_updated)
 
         self._cards_container = self._page.cards_container
         self._cards_layout = self._page.cards_layout
         
         # Register callback for Moondream2 model download messages
-        set_model_download_callback(lambda msg: self.show_status_message(msg, duration_ms=5000))
-
-    def _on_model_load_started(self) -> None:
-        self._progress.setRange(0, 0)
-        self._progress.setValue(0)
-
-    def _on_model_load_finished(self, success: bool) -> None:
-        self._progress.setRange(0, 100)
-        self._progress.setValue(0)
-
-    def _on_model_changed(self, model_name: str) -> None:
-        self._model_title.setText(f"Model: {model_name}" if model_name else "Model: None")
-
-    def _on_cache_warm_started(self) -> None:
-        self._progress.setRange(0, 0)
-        self._progress.setValue(0)
-
-    def _on_cache_warm_finished(self) -> None:
-        self._progress.setRange(0, 100)
-        self._progress.setValue(0)
-
-    def _on_model_state_updated(self, state: str) -> None:
-        settings_color, chat_color = self._get_header_colors_for_state(state)
-        self._set_column_header_color("Settings", settings_color)
-        self._set_column_header_color("Chat", chat_color)
-
-    def _get_header_colors_for_state(self, state: str) -> tuple[str, str]:
-        if state == "Ready":
-            return HEADER_COLOR_READY, HEADER_COLOR_READY
-        if state == "Waiting":
-            return HEADER_COLOR_READY, HEADER_COLOR_LOADING
-        if state == "Loading":
-            return HEADER_COLOR_LOADING, HEADER_COLOR_LOADING
-        if state == "Fault":
-            return HEADER_COLOR_FAULT, HEADER_COLOR_FAULT
-        return HEADER_COLOR_FAULT, HEADER_COLOR_FAULT
+        attach_download_callback(self._status_controller, duration_ms=5000)
 
     def _set_column_header_color(self, name: str, color: str) -> None:
         self._page.set_column_header_color(name, color)
@@ -239,68 +230,35 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
     def _start_mcp_server(self) -> None:
         if self._mcp_server is None:
             try:
-                self._logger.info("Starting internal MCP server...")
-                self._mcp_server = InternalMcpServer(
-                    ui_invoke=self._invoke_ui,
-                    ui_create_card=self._create_svg_card,
-                    ui_delete_card=self._delete_svg_card,
-                )
-                self._mcp_server.start()
-                self._chat_container.refresh_mcp_tools()
+                self._mcp_server = start_internal_mcp(self._layout_adapter, self, self._logger)
             except Exception as exc:
                 self._logger.exception("Failed to start internal MCP server: %s", exc)
 
         # Do not auto-exit when autorun is enabled; exit is triggered after autorun completion
 
     def _exit_if_idle(self) -> None:
-        self._logger.info("Exit-idle requested; capturing screenshot and starting description")
-        # Capture screenshot for autorun to let agent see what happened
-        screenshot_path, description_thread = Utilities.log_screenshot(
-            self._log_file,
-            widget=self,
-            card_widgets=list(self._cards.values()),
-        )
+        self._exit_controller.request_exit()
 
-        if description_thread is not None:
-            self._logger.info("Screenshot description thread started; keeping window open until completion")
-            self._pending_description_thread = description_thread
-            QtCore.QTimer.singleShot(200, self._wait_for_description_and_exit)
-            return
-
+    def _quit_app(self) -> None:
+        self._stop_mcp_server()
         app = QtWidgets.QApplication.instance()
         if app:
             app.quit()
 
-    def _wait_for_description_and_exit(self) -> None:
-        thread = self._pending_description_thread
-        if thread is None:
-            app = QtWidgets.QApplication.instance()
-            if app:
-                app.quit()
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        self._stop_mcp_server()
+        super().closeEvent(event)
+
+    def _stop_mcp_server(self) -> None:
+        server = self._mcp_server
+        if server is None:
             return
-
-        if thread.is_alive():
-            QtCore.QTimer.singleShot(200, self._wait_for_description_and_exit)
-            return
-
-        self._logger.info("Screenshot description finished; exiting now")
-        self._pending_description_thread = None
-        app = QtWidgets.QApplication.instance()
-        if app:
-            app.quit()
-
-    def show_status_message(self, message: str, duration_ms: int = 3000) -> None:
-        """Show a temporary status message (toast-like).
-        
-        Args:
-            message: Message to display
-            duration_ms: How long to show the message (milliseconds)
-        """
-        self._logger.info("Status: %s", message)
-        # Update the model title temporarily to show the message
-        original_text = self._model_title.text()
-        self._model_title.setText(message)
-        QtCore.QTimer.singleShot(duration_ms, lambda: self._model_title.setText(original_text))
+        stop = getattr(server, "stop", None)
+        if callable(stop):
+            try:
+                stop()
+            except Exception as exc:
+                self._logger.warning("Failed to stop internal MCP server: %s", exc)
 
     def schedule_exit(self, delay_ms: int) -> None:
         self._logger.info("Scheduling exit in %d ms", delay_ms)

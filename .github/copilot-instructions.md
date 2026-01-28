@@ -6,9 +6,20 @@ Automation and tooling
 - The chat layer parses tool requests and surfaces tool calls/results in the conversation.
 - Internal MCPs are loaded from MCP_Internal/mcp_*.py and share a single FastMCP HTTP server.
 - Internal MCP tools are prefixed (e.g., internal.mcp_card_svg.CreateCard).
+- If changes should compile/run, run the standard autorun test after code changes and review the latest log for real errors.
+- If changes are intentionally mid-iteration and not expected to run yet, skip autorun and run a lint-style check instead.
+- After running a test with autorun, read the most recent log file and check for error messages. If they are real errors, attempt to fix them and run the test again.
+- If shutdown triggers MCP HTTP stream errors (e.g., anyio.ClosedResourceError in the SSE writer), treat them as non-critical but prefer a graceful close: ensure client streams/session managers are closed before stopping the server, and gate post-shutdown writes with an explicit shutdown flag.
+- UI launch safety: Never run a UI that blocks indefinitely. Always do one of the following:
+	- Ask the user to close the window after viewing.
+	- Use a timeout (if supported).
+	- Use --autorun with a JSON script that exits on completion.
+	- Run in background with an explicit timeout and report how to stop it.
 - Autorun uses JSON input with explicit message boundaries; avoid silent fallbacks during development.
 	- Single-instance behavior: if ChatLlama is already running, new launches forward the args (including autorun) to the existing instance and then exit.
 	- Run autorun via the CLI: PEPPER.py --autorun <path-to-autorun-json>.
+	- PEPPER_LAUNCHER.py: if --autorun receives a single string that does not look like a filename, it is auto-wrapped into a JSON autorun file in settings_folder/autoruns.
+	- Inline autorun text logs the final LLM response before exit.
 	- Autorun JSON is an array of messages; each message can include text and optional images.
 	Example:
 	{
@@ -45,6 +56,12 @@ Paths and defaults
 
 Development preference
 - Avoid fallbacks that mask errors during development. If a dependency fails (e.g., llama-server), surface the failure rather than silently degrading.
+
+Current task (multi-phase)
+- (empty)
+
+Todo (future tasks)
+- Abstract UI behind an intermediate layer; see [TechDocs/ui_abstraction_api.md](TechDocs/ui_abstraction_api.md).
 
 File organization
 - PEPPER.py: main Qt window, splitters, toolbars, wiring

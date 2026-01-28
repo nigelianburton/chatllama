@@ -1,35 +1,84 @@
-Integration Plan: Task 1 - Shared Model Control API
-Objective: Decouple model management from the Qt UI and expose it via a shared HTTP service to support functional parity between the legacy Qt client and the new Reflex web client.
+# Integration Plan — Launcher + Pluggable UI (App + UIContracts)
 
-Task 1.1: Create the Control Service
-File: Engine/control_service.py
+## Objective
+Decouple UI implementations from shared services so the UI is replaceable (Qt now, others later) without changing core behavior.
 
-Requirements:
+---
 
-Implement a FastAPI server running on http://127.0.0.1:8001 (to avoid conflict with llama-server on 8014).
+## Phase 0 — Baseline & Safety
+**Tasks**
+- Keep PEPPER.py unchanged as reference.
+- Ensure PEPPER_LAUNCHER.py runs with the same CLI args as PEPPER.py plus `--ui`.
+- Confirm no Qt imports in PEPPER_LAUNCHER.py.
 
-Endpoint GET /status: Return a JSON object with model_name and status (Ready, Loading, Fault, Waiting) by wrapping manager_models._get_model_state().
+**Tests**
+- Run launcher help:
+	`python PEPPER_LAUNCHER.py --help`
+- Run Qt UI path:
+	`python PEPPER_LAUNCHER.py --ui qt`
 
-Endpoint GET /models: Return the list of discovered GGUF files by wrapping manager_models.get_discovered_models().
+---
 
-Endpoint POST /load: Accept a model_name JSON payload. Execute manager_models.load_model(name) in a background thread using FastAPI's BackgroundTasks to ensure the API remains responsive during the load.
+## Phase 1 — App + UIContracts Scaffolding
+**Tasks**
+- Create App/ for shared orchestration and state.
+- Create UIContracts/ for UI interface definitions (pure Python, no Qt).
+- Move shared services into App (single-instance, control service lifecycle, MCP server startup, autorun orchestration).
+- Keep UI-specific logic in UI modules; they implement the UIContracts interface.
 
-Task 1.2: Lifecycle Management in PEPPER.py
-File: PEPPER.py
+**Tests**
+- Import checks:
+	`python -c "import App, UIContracts"`
+- Run Qt UI path:
+	`python PEPPER_LAUNCHER.py --ui qt`
 
-Requirements:
+---
 
-In the main() function, launch control_service.py as a background subprocess before initializing the Qt application.
+## Phase 2 — Qt Layout Conformance
+**Tasks**
+- Ensure UI/pepper_qt_layout.py implements UIContracts.
+- Replace any shared service logic in UI with App calls.
 
-Ensure the subprocess is terminated correctly when the main window is closed.
+**Tests**
+- Launch and open main window:
+	`python PEPPER_LAUNCHER.py --ui qt`
 
-Task 1.3: Update Reflex BaseState
-File: PepperReflex/pepper_reflex/state.py
+---
 
-Requirements:
+## Phase 3 — Move Non-UI Logic Out of UI
+**Tasks**
+- Identify engine/state logic inside UI modules.
+- Relocate state ownership into App services.
+- UI becomes pure view + event forwarding.
 
-Add a background task (rx.background_task) that polls http://127.0.0.1:8001/status every 2 seconds.
+**Tests**
+- Run a normal session and confirm model list, chat, and cards work.
+- Optional autorun smoke test:
+	`python PEPPER_LAUNCHER.py --autorun D:/_GITN/chatllama/autoruns/autorun_svg_card.json`
 
-Update BaseState.model_name and BaseState.model_state based on the API response.
+---
 
-Wire the "Load" button in the Settings view to perform a POST request to the service.
+## Phase 4 — Parity Audit vs PEPPER.py
+**Tasks**
+- Side-by-side behavior checklist against PEPPER.py.
+- Close any gaps in UIContracts or App services.
+
+**Tests**
+- Repeat CLI behaviors (model selection, autorun, logs).
+- Confirm logs saved to settings folder.
+
+---
+
+## Phase 5 — Ready for Alternate UI
+**Tasks**
+- Add stub UI/pepper_reflex_layout.py implementing UIContracts.
+- Ensure launcher can switch UI with `--ui reflex`.
+
+**Tests**
+- `python PEPPER_LAUNCHER.py --ui reflex` (should start without crashing).
+
+---
+
+## Notes
+- All tests run inside `conda activate chatllama2`.
+- Avoid new network dependencies unless client/server split is explicitly required.
