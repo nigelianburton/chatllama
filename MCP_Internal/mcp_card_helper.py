@@ -34,7 +34,7 @@ def register_create_delete_tools(
             return create_card(guid, isPortrait)
 
         card = ui_invoke(_create)
-        if not isinstance(card, card_cls):
+        if not isinstance(card, card_cls) and card.__class__.__name__ != card_cls.__name__:
             return error_factory(f"UI did not return {card_cls.__name__}")
         cards[guid] = card
         return {"status": "ok", "guid": guid}

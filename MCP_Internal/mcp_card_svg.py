@@ -15,15 +15,12 @@ RESOURCES_DIR = Path(__file__).resolve().parents[1] / "resources"
 RESOURCE_SCHEME = "resource:"
 
 INTERNAL_MCP_INSTRUCTIONS_TEMPLATE = (
-    "You can only use these tools: {create_tool}, {draw_tool}, {delete_tool}. "
-    "You MUST call {create_tool} first to get a guid; never invent or guess guids. "
-    "{create_tool} returns a response with a guid field. "
-    "Then pass that exact guid to {draw_tool}. "
-    "{draw_tool} requires full SVG markup with a <svg> root sized 480x640 (portrait) or 640x480 (landscape). "
-    "Never output SVG in assistant messages; only provide svg_instructions inside the {draw_tool} tool call arguments. "
-    "After {draw_tool} succeeds, reply with a brief confirmation and do not call {draw_tool} again unless the user requests changes. "
-    "For images, use href values like resource:pic1-portrait.jpg or resource:pic2-landscape.jpg (from the resources folder). "
-    "Do not embed base64 images in prompts. Do not call any other tools."
+    "## SVG Card Rules\n"
+    "1. **Workflow**: {create_tool} (returns GUID) -> {draw_tool} (uses GUID).\n"
+    "2. **Strict Constraint**: Use {draw_tool} ONLY for complex graphics/layouts. PROHIBITED for plain text.\n"
+    "3. **Format**: {draw_tool} requires 480x640 (portrait) or 640x480 (landscape) <svg> markup.\n"
+    "4. **Assets**: Use 'resource:filename' for images. No Base64.\n"
+    "5. **Assistant Output**: Confirm tool success briefly. Never output raw SVG in chat."
 )
 
 
@@ -31,7 +28,7 @@ def get_instructions(name_prefix: str | None = None) -> str:
     prefix = f"{name_prefix}." if name_prefix else ""
     return INTERNAL_MCP_INSTRUCTIONS_TEMPLATE.format(
         create_tool=f"{prefix}CreateCard",
-        draw_tool=f"{prefix}DrawCard",
+        draw_tool=f"{prefix}RenderSVG",
         delete_tool=f"{prefix}DeleteCard",
     )
 
@@ -41,7 +38,7 @@ def validate_svg(svg: str) -> str | None:
         return "SVG must be full <svg> markup. Include a <svg> root element and closing </svg>."
     trimmed = svg.strip()
     if not trimmed.startswith("<svg") or not trimmed.endswith("</svg>"):
-        return "svg_instructions must be ONLY a single <svg>...</svg> document with no extra text."
+        return "svg_markup must be ONLY a single <svg>...</svg> document with no extra text."
     if "<svg" not in trimmed or "</svg>" not in trimmed:
         return "SVG must be full <svg> markup. Include a <svg> root element and closing </svg>."
     return None
@@ -190,24 +187,24 @@ def register_tools(
         card_label="card",
     )
 
-    @server.tool(name=_tool_name("DrawCard"))
-    def DrawCard(GUID: str, svg_instructions: str) -> dict:
+    @server.tool(name=_tool_name("RenderSVG"))
+    def RenderSVG(GUID: str, svg_markup: str) -> dict:
         """Render SVG into an existing card."""
         card = cards.get(GUID)
         if not card:
             return _error("Card not found. Use CreateCard first to obtain a GUID.")
 
-        svg_error = validate_svg(svg_instructions)
+        svg_error = validate_svg(svg_markup)
         if svg_error:
             return _error(svg_error)
 
-        svg_instructions, missing = replace_resource_refs(svg_instructions)
+        svg_markup, missing = replace_resource_refs(svg_markup)
         if missing:
             missing_list = ", ".join(sorted(set(missing)))
             return _error(f"Resource image not found: {missing_list}")
 
         def _draw() -> None:
-            card.load_svg_content(svg_instructions)
+            card.load_svg_content(svg_markup)
 
         ui_invoke(_draw)
         return {"status": "ok", "guid": GUID}
@@ -215,7 +212,7 @@ def register_tools(
 
 __all__ = ["register_tools", "get_instructions", "SVGCard"]
 
-MCP_TOOL_NAMES = ["CreateCard", "DrawCard", "DeleteCard"]
+MCP_TOOL_NAMES = ["CreateCard", "RenderSVG", "DeleteCard"]
 
 
 def get_tool_names() -> list[str]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import textwrap
 from typing import Any, Callable
 
 from MCP_Internal.mcp_card_svg import SVGCard
@@ -8,13 +9,11 @@ from MCP_Internal.mcp_card_helper import register_create_delete_tools
 
 
 INTERNAL_MCP_INSTRUCTIONS_TEMPLATE = (
-    "You can only use these tools: {create_tool}, {draw_tool}, {delete_tool}. "
-    "You MUST call {create_tool} first to get a guid; never invent or guess guids. "
-    "{create_tool} returns a response with a guid field. "
-    "Then pass that exact guid to {draw_tool}. "
-    "{draw_tool} renders multiline text in the card. "
-    "Never output SVG in assistant messages; only provide text inside the {draw_tool} tool call arguments. "
-    "After {draw_tool} succeeds, reply with a brief confirmation and do not call {draw_tool} again unless the user requests changes."
+    "## Text Card Rules\n"
+    "1. **Workflow**: {create_tool} (returns GUID) -> {draw_tool} (uses GUID).\n"
+    "2. **Strict Constraint**: Use {draw_tool} ONLY for plain, human-readable multiline text. PROHIBITED for SVG, HTML, or code.\n"
+    "3. **Formatting**: Text is rendered in a standard font; no custom styling or markup is supported.\n"
+    "4. **Assistant Output**: Confirm tool success briefly. Do not repeat the text in chat."
 )
 
 
@@ -22,7 +21,7 @@ def get_instructions(name_prefix: str | None = None) -> str:
     prefix = f"{name_prefix}." if name_prefix else ""
     return INTERNAL_MCP_INSTRUCTIONS_TEMPLATE.format(
         create_tool=f"{prefix}CreateCard",
-        draw_tool=f"{prefix}DrawCard",
+        draw_tool=f"{prefix}RenderText",
         delete_tool=f"{prefix}DeleteCard",
     )
 
@@ -35,11 +34,15 @@ def validate_text(text: str) -> str | None:
 
 def build_svg_from_text(text: str, is_portrait: bool) -> str:
     width, height = (480, 640) if is_portrait else (640, 480)
-    lines = _normalize_lines(text)
-    font_size = 18
+    font_size = 20
+    padding = 24
+    max_chars = max(int((width - (padding * 2)) / (font_size * 0.55)), 10)
+    lines = _wrap_text(text, max_chars)
     line_height = int(font_size * 1.4)
-    start_x = 24
-    start_y = 40
+    max_lines = max(int((height - (padding * 2)) / line_height), 1)
+    lines = lines[:max_lines]
+    start_x = padding
+    start_y = padding + font_size
 
     text_elements = []
     for index, line in enumerate(lines):
@@ -61,6 +64,24 @@ def build_svg_from_text(text: str, is_portrait: bool) -> str:
 
 def _normalize_lines(text: str) -> list[str]:
     return [line.rstrip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+
+
+def _wrap_text(text: str, max_chars: int) -> list[str]:
+    normalized = _normalize_lines(text)
+    wrapped: list[str] = []
+    for line in normalized:
+        if not line.strip():
+            wrapped.append("")
+            continue
+        wrapped.extend(
+            textwrap.wrap(
+                line,
+                width=max_chars,
+                break_long_words=True,
+                break_on_hyphens=False,
+            )
+        )
+    return wrapped
 
 
 def register_tools(
@@ -92,18 +113,18 @@ def register_tools(
         card_label="card",
     )
 
-    @server.tool(name=_tool_name("DrawCard"))
-    def DrawCard(GUID: str, text: str) -> dict:
+    @server.tool(name=_tool_name("RenderText"))
+    def RenderText(GUID: str, text_content: str) -> dict:
         """Render multiline text into an existing card."""
         card = cards.get(GUID)
         if not card:
             return _error("Card not found. Use CreateCard first to obtain a GUID.")
 
-        text_error = validate_text(text)
+        text_error = validate_text(text_content)
         if text_error:
             return _error(text_error)
 
-        svg = build_svg_from_text(text, card.is_portrait)
+        svg = build_svg_from_text(text_content, card.is_portrait)
 
         def _draw() -> None:
             card.load_svg_content(svg)
@@ -114,7 +135,7 @@ def register_tools(
 
 __all__ = ["register_tools", "get_instructions"]
 
-MCP_TOOL_NAMES = ["CreateCard", "DrawCard", "DeleteCard"]
+MCP_TOOL_NAMES = ["CreateCard", "RenderText", "DeleteCard"]
 
 
 def get_tool_names() -> list[str]:

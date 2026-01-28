@@ -50,7 +50,7 @@ if not provided_paths:
             print(f"      {provided_paths[0]}")
         else:
             print("\n✗ No screenshot found in logs folder and no argument provided")
-            print("Usage: python lab_describe_snapshot.py <path_to_screencap.png> [card1.png ... cardN.png]")
+            print("Usage: python Engine/lab_describe_snapshot.py <path_to_screencap.png> [card1.png ... cardN.png]")
             sys.exit(1)
 else:
     print("\n[2/5] Using provided images:")

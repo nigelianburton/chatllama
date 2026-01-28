@@ -1,0 +1,13 @@
+{
+  "messages": [
+    {
+      "text": "Create a new text card in portrait orientation using internal.mcp_card_textviewer.CreateCard, then call internal.mcp_card_textviewer.RenderText with this paragraph: Cats often balance fierce independence with a quiet need for security; a pet cat’s psychology is shaped by territory, routine, and subtle social bonds. They watch for patterns, seek safe perches, and negotiate attention on their terms, using purrs and slow blinks to reinforce trust. Underneath the aloof veneer is a deeply observant mind that learns household rhythms and forms strong attachments to familiar people and places."
+    },
+    {
+      "text": "Create a new SVG card in portrait orientation using internal.mcp_card_svg.CreateCard, then call internal.mcp_card_svg.RenderSVG with this exact SVG: <svg width=\"480\" height=\"640\" viewBox=\"0 0 480 640\" xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"480\" height=\"640\" fill=\"#f7f3ef\"/><rect x=\"24\" y=\"24\" width=\"432\" height=\"592\" fill=\"#ffffff\" stroke=\"#d6c7b8\" stroke-width=\"4\"/><text x=\"240\" y=\"80\" font-family=\"Georgia\" font-size=\"40\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#2b2b2b\">MELODY MAG</text><text x=\"240\" y=\"110\" font-family=\"Arial\" font-size=\"14\" text-anchor=\"middle\" fill=\"#7a6f66\">January 2026 • Studio Issue</text><image href=\"resource:josie.png\" x=\"48\" y=\"140\" width=\"384\" height=\"320\" preserveAspectRatio=\"xMidYMid slice\"/><rect x=\"60\" y=\"480\" width=\"360\" height=\"92\" fill=\"#f0e4da\"/><text x=\"240\" y=\"510\" font-family=\"Arial\" font-size=\"20\" font-weight=\"bold\" text-anchor=\"middle\" fill=\"#2b2b2b\">Inside: Dreamy Soundscapes</text><text x=\"240\" y=\"538\" font-family=\"Arial\" font-size=\"14\" text-anchor=\"middle\" fill=\"#5b524c\">Interviews • Gear • Playlists</text></svg>"
+    },
+    {
+      "text": "Create a new web card in landscape orientation using internal.mcp_card_web.CreateCard, then call internal.mcp_card_web.RenderWeb with this HTML: <html><body style=\"margin:0; display:flex; gap:8px; padding:16px; background:#f4f4f4;\"><img src=\"file:///D:/_GITN/chatllama/resources/josie.png\" style=\"width:50%; height:auto; border:2px solid #ddd;\"/><img src=\"file:///D:/_GITN/chatllama/resources/br-cc-7510r.jpg\" style=\"width:50%; height:auto; border:2px solid #ddd;\"/></body></html>"
+    }
+  ]
+}

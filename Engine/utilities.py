@@ -232,7 +232,10 @@ class Utilities:
             if card_widgets:
                 for index, card in enumerate(card_widgets, start=1):
                     try:
-                        card_pixmap = card.grab()
+                        if hasattr(card, "grab_card_pixmap"):
+                            card_pixmap = card.grab_card_pixmap()
+                        else:
+                            card_pixmap = card.grab()
                     except Exception:
                         logger.warning("Failed to grab card %d", index)
                         continue
@@ -267,7 +270,7 @@ class Utilities:
         try:
             logger.info("Starting screenshot description generation for: %s", screencap_path)
             
-            script_path = Path(__file__).resolve().parent.parent / "lab_describe_snapshot.py"
+            script_path = Path(__file__).resolve().parent / "lab_describe_snapshot.py"
             if not script_path.exists():
                 logger.error("Snapshot analyzer not found: %s", script_path)
                 return
