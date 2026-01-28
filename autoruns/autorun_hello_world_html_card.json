@@ -1,7 +1,0 @@
-{
-  "messages": [
-    {
-      "text": "Create a web card and render HTML that displays a Hello World heading. Use DrawCard with raw HTML content (not a URL or file path)."
-    }
-  ]
-}
