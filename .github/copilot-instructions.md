@@ -58,7 +58,7 @@ Development preference
 - Avoid fallbacks that mask errors during development. If a dependency fails (e.g., llama-server), surface the failure rather than silently degrading.
 
 Current task (multi-phase)
-- (empty)
+- Clean up internal card MCPs: shared create/delete helper in MCP_Internal/mcp_card_helper.py, unify web card to use DrawCard with URL/file/HTML parsing, and keep FastMCP decorators on mcp_*.py tools.
 
 Todo (future tasks)
 - Abstract UI behind an intermediate layer; see [TechDocs/ui_abstraction_api.md](TechDocs/ui_abstraction_api.md).
@@ -109,6 +109,8 @@ Logs
 - Log file: session.log (per-session)
 - Interaction log: interaction.json (per-session summary)
 - Autorun artifacts (when enabled): screencap.png, card1.png..cardN.png, description.txt
+- Autorun session.log content: autorun request + availability transitions, staged/submitted messages, tool calls, assistant response summary, exit scheduling, screenshot capture, and snapshot analyzer output.
+- Autorun input JSON is copied into the session log folder (filename preserved or suffixed if already present).
 
 Todo
 - If the LLM is flagged as being able to view images, MCP responses should include a screen capture of the resulting card.

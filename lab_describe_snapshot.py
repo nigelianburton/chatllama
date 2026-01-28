@@ -71,6 +71,23 @@ print(f"OK: Files found ({len(provided_paths)} total)")
 
 # Load Moondream model
 MODEL_ID = "vikhyatk/moondream2"
+MODEL_SLUG = "models--vikhyatk--moondream2"
+
+def _find_hf_cache_root() -> Path | None:
+    env_cache = os.environ.get("HF_HUB_CACHE")
+    if env_cache:
+        return Path(env_cache)
+    env_home = os.environ.get("HF_HOME")
+    if env_home:
+        return Path(env_home) / "hub"
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def _has_cached_model(cache_root: Path) -> bool:
+    return (cache_root / MODEL_SLUG).exists()
+cache_root = _find_hf_cache_root()
+cache_ready = cache_root is not None and _has_cached_model(cache_root)
+
 print(f"\n[4/5] Loading {MODEL_ID}...")
 print("      (first run will download ~3.5GB from HuggingFace)")
 print("      This may take 2-5 minutes depending on your connection...")
@@ -84,14 +101,21 @@ def _load_model_background() -> None:
     global model, tokenizer, load_error
     start_time = time.time()
     try:
+        if cache_ready:
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
         print("      [bg] Loading model...")
         model = AutoModelForCausalLM.from_pretrained(
             MODEL_ID,
             trust_remote_code=True,
-            device_map="auto"  # Auto-select GPU if available
+            device_map="auto",  # Auto-select GPU if available
+            local_files_only=cache_ready,
         )
         print("      [bg] Loading tokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+        tokenizer = AutoTokenizer.from_pretrained(
+            MODEL_ID,
+            local_files_only=cache_ready,
+        )
         elapsed = time.time() - start_time
         print(f"OK: [bg] Model loaded successfully in {elapsed:.1f}s")
     except Exception as e:

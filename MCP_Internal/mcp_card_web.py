@@ -1,29 +1,24 @@
 from __future__ import annotations
 
-import base64
-import re
-from pathlib import Path
 from typing import Any, Callable
+from pathlib import Path
+from urllib.parse import urlparse
+import re
 
-from PyQt6 import QtCore, QtGui, QtWidgets, QtSvgWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets, QtWebEngineWidgets
 
 from Engine.logger import get_logger
 from MCP_Internal.mcp_card_helper import register_create_delete_tools
 
-
-RESOURCES_DIR = Path(__file__).resolve().parents[1] / "resources"
-RESOURCE_SCHEME = "resource:"
 
 INTERNAL_MCP_INSTRUCTIONS_TEMPLATE = (
     "You can only use these tools: {create_tool}, {draw_tool}, {delete_tool}. "
     "You MUST call {create_tool} first to get a guid; never invent or guess guids. "
     "{create_tool} returns a response with a guid field. "
     "Then pass that exact guid to {draw_tool}. "
-    "{draw_tool} requires full SVG markup with a <svg> root sized 480x640 (portrait) or 640x480 (landscape). "
-    "Never output SVG in assistant messages; only provide svg_instructions inside the {draw_tool} tool call arguments. "
-    "After {draw_tool} succeeds, reply with a brief confirmation and do not call {draw_tool} again unless the user requests changes. "
-    "For images, use href values like resource:pic1-portrait.jpg or resource:pic2-landscape.jpg (from the resources folder). "
-    "Do not embed base64 images in prompts. Do not call any other tools."
+    "{draw_tool} accepts a single string that can be a URL, a local file path, or raw HTML. "
+    "Never output HTML in assistant messages; only provide HTML inside the {draw_tool} tool call arguments. "
+    "After {draw_tool} succeeds, reply with a brief confirmation and do not call it again unless the user requests changes."
 )
 
 
@@ -36,52 +31,13 @@ def get_instructions(name_prefix: str | None = None) -> str:
     )
 
 
-def validate_svg(svg: str) -> str | None:
-    if not svg:
-        return "SVG must be full <svg> markup. Include a <svg> root element and closing </svg>."
-    trimmed = svg.strip()
-    if not trimmed.startswith("<svg") or not trimmed.endswith("</svg>"):
-        return "svg_instructions must be ONLY a single <svg>...</svg> document with no extra text."
-    if "<svg" not in trimmed or "</svg>" not in trimmed:
-        return "SVG must be full <svg> markup. Include a <svg> root element and closing </svg>."
+def validate_draw_content(content: str) -> str | None:
+    if not content or not str(content).strip():
+        return "Draw content must not be empty."
     return None
 
 
-def replace_resource_refs(svg: str) -> tuple[str, list[str]]:
-    missing: list[str] = []
-
-    def _resource_to_data_uri(resource_value: str) -> str | None:
-        name = resource_value[len(RESOURCE_SCHEME) :].lstrip("/")
-        name = Path(name).name
-        if not name:
-            return None
-        path = RESOURCES_DIR / name
-        if not path.exists():
-            return None
-        data = path.read_bytes()
-        ext = path.suffix.lower()
-        mime = "image/jpeg" if ext in {".jpg", ".jpeg"} else "image/png"
-        b64 = base64.b64encode(data).decode("ascii")
-        return f"data:{mime};base64,{b64}"
-
-    def _replace(match: re.Match[str]) -> str:
-        attr = match.group("attr")
-        quote = match.group("quote")
-        value = match.group("value")
-        if not value.startswith(RESOURCE_SCHEME):
-            return match.group(0)
-        data_uri = _resource_to_data_uri(value)
-        if data_uri is None:
-            missing.append(value)
-            return match.group(0)
-        return f"{attr}={quote}{data_uri}{quote}"
-
-    pattern = r"(?P<attr>xlink:href|href)=(?P<quote>['\"])(?P<value>[^'\"]+)(?P=quote)"
-    updated = re.sub(pattern, _replace, svg)
-    return updated, missing
-
-
-class SVGCard(QtWidgets.QFrame):
+class WebCard(QtWidgets.QFrame):
     def __init__(self, guid: str, is_portrait: bool) -> None:
         super().__init__()
         self._logger = get_logger(self)
@@ -100,7 +56,7 @@ class SVGCard(QtWidgets.QFrame):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self._view = QtSvgWidgets.QSvgWidget(self)
+        self._view = QtWebEngineWidgets.QWebEngineView(self)
         self._view.setSizePolicy(
             QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Expanding)
         )
@@ -150,19 +106,27 @@ class SVGCard(QtWidgets.QFrame):
             width -= (margins.left() + margins.right())
         return max(width, 1)
 
-    def load_svg_content(self, svg: str) -> None:
-        if not svg:
-            self._logger.warning("Empty SVG content for card %s", self.guid)
+    def load_url(self, url: str) -> None:
+        qurl = QtCore.QUrl.fromUserInput(url)
+        if not qurl.isValid():
+            self._logger.warning("Invalid URL for card %s: %s", self.guid, url)
             return
-        self._view.load(QtCore.QByteArray(svg.encode("utf-8")))
+        self._view.load(qurl)
+
+    def load_html(self, html: str, base_url: str | None = None) -> None:
+        if base_url:
+            base = QtCore.QUrl.fromUserInput(base_url)
+            self._view.setHtml(html, base)
+        else:
+            self._view.setHtml(html)
 
 
 def register_tools(
     server: Any,
     ui_invoke: Callable[[Callable[[], object]], object],
-    ui_create_card: Callable[[str, bool], SVGCard],
-    ui_delete_card: Callable[[SVGCard], None],
-    cards: dict[str, SVGCard],
+    ui_create_card: Callable[..., WebCard],
+    ui_delete_card: Callable[[WebCard], None],
+    cards: dict[str, WebCard],
     name_prefix: str | None = None,
 ) -> None:
     instructions = get_instructions(name_prefix)
@@ -171,11 +135,7 @@ def register_tools(
         return f"{name_prefix}.{base}" if name_prefix else base
 
     def _error(message: str) -> dict[str, str]:
-        return {
-            "status": "error",
-            "message": message,
-            "hint": instructions,
-        }
+        return {"status": "error", "message": message, "hint": instructions}
 
     register_create_delete_tools(
         server=server,
@@ -184,36 +144,71 @@ def register_tools(
         ui_create_card=ui_create_card,
         ui_delete_card=ui_delete_card,
         cards=cards,
-        card_cls=SVGCard,
+        card_cls=WebCard,
         error_factory=_error,
-        create_card=lambda guid, is_portrait: ui_create_card(guid, is_portrait),
+        create_card=lambda guid, is_portrait: ui_create_card(guid, is_portrait, "web"),
         card_label="card",
     )
 
+    def _looks_like_html(value: str) -> bool:
+        lowered = value.lstrip().lower()
+        if lowered.startswith("<"):
+            return True
+        return any(marker in lowered[:200] for marker in ("<html", "<!doctype", "<body", "<div", "<span", "<p", "<head", "<style", "<script"))
+
+    def _looks_like_url(value: str) -> bool:
+        parsed = urlparse(value)
+        if parsed.scheme in ("http", "https", "file"):
+            return True
+        return bool(re.match(r"^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}([/?#].*)?$", value))
+
     @server.tool(name=_tool_name("DrawCard"))
-    def DrawCard(GUID: str, svg_instructions: str) -> dict:
-        """Render SVG into an existing card."""
+    def DrawCard(GUID: str, content: str) -> dict:
+        """Render URL, file path, or HTML into an existing web card."""
         card = cards.get(GUID)
         if not card:
             return _error("Card not found. Use CreateCard first to obtain a GUID.")
 
-        svg_error = validate_svg(svg_instructions)
-        if svg_error:
-            return _error(svg_error)
+        content_error = validate_draw_content(content)
+        if content_error:
+            return _error(content_error)
 
-        svg_instructions, missing = replace_resource_refs(svg_instructions)
-        if missing:
-            missing_list = ", ".join(sorted(set(missing)))
-            return _error(f"Resource image not found: {missing_list}")
+        stripped = content.strip()
+        path = Path(stripped).expanduser()
 
-        def _draw() -> None:
-            card.load_svg_content(svg_instructions)
+        if _looks_like_html(stripped):
+            def _render_html() -> None:
+                card.load_html(stripped)
 
-        ui_invoke(_draw)
+            ui_invoke(_render_html)
+            return {"status": "ok", "guid": GUID}
+
+        if path.exists():
+            def _load_file() -> None:
+                card.load_url(path.resolve().as_uri())
+
+            ui_invoke(_load_file)
+            return {"status": "ok", "guid": GUID}
+
+        if _looks_like_url(stripped):
+            url = stripped
+            if not urlparse(url).scheme:
+                url = f"https://{url}"
+
+            def _load_url() -> None:
+                card.load_url(url)
+
+            ui_invoke(_load_url)
+            return {"status": "ok", "guid": GUID}
+
+        def _render_html_fallback() -> None:
+            card.load_html(stripped)
+
+        ui_invoke(_render_html_fallback)
         return {"status": "ok", "guid": GUID}
 
 
-__all__ = ["register_tools", "get_instructions", "SVGCard"]
+__all__ = ["register_tools", "get_instructions", "WebCard"]
 
 MCP_TOOL_NAMES = ["CreateCard", "DrawCard", "DeleteCard"]
 

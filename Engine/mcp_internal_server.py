@@ -8,7 +8,8 @@ from typing import Callable, Optional, Any
 
 from Engine.logger import get_logger
 from constants import INTERNAL_MCP_NAME
-from MCP_Internal.card_svg import SVGCard
+from MCP_Internal.mcp_card_svg import SVGCard
+from PyQt6 import QtWidgets
 
 try:
     from fastmcp.server import FastMCP
@@ -20,8 +21,8 @@ class InternalMcpServer:
     def __init__(
         self,
         ui_invoke: Callable[[Callable[[], object]], object],
-        ui_create_card: Callable[[str, bool], SVGCard],
-        ui_delete_card: Callable[[SVGCard], None],
+        ui_create_card: Callable[..., QtWidgets.QWidget],
+        ui_delete_card: Callable[[QtWidgets.QWidget], None],
         host: str = "127.0.0.1",
         port: int = 6821,
     ) -> None:
@@ -32,7 +33,7 @@ class InternalMcpServer:
         self._ui_invoke = ui_invoke
         self._ui_create_card = ui_create_card
         self._ui_delete_card = ui_delete_card
-        self._cards: dict[str, SVGCard] = {}
+        self._cards: dict[str, QtWidgets.QWidget] = {}
         self._server: Any | None = None
         self._shutting_down = False
 

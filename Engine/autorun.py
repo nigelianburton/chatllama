@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 import time
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
-from Engine.logger import get_logger
+from Engine.logger import get_logger, get_log_dir
 from Engine.manager_chats import LlamaChatManager
 from constants import (
     AUTORUN_BUSY_ACK_TIMEOUT_SECONDS,
@@ -97,6 +98,25 @@ def run_autorun(
         text_path,
         len(parsed_messages),
     )
+
+    log_dir = get_log_dir()
+    if log_dir is not None:
+        target_path = log_dir / text_path.name
+        if target_path.exists():
+            stem = text_path.stem
+            suffix = text_path.suffix
+            index = 1
+            while True:
+                candidate = log_dir / f"{stem}_{index}{suffix}"
+                if not candidate.exists():
+                    target_path = candidate
+                    break
+                index += 1
+        try:
+            shutil.copy2(text_path, target_path)
+            logger.info("Autorun input copied to log folder: %s", target_path)
+        except Exception as exc:
+            logger.warning("Autorun input copy failed: %s", exc)
 
     chat_manager: Optional[LlamaChatManager] = None
     availability_event = threading.Event()

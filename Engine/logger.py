@@ -11,7 +11,8 @@ from typing import Any, Optional
 from constants import SETTINGS_DEV
 
 
-LOGS_DIR = None
+LOGS_DIR: Path | None = None
+LOG_FILE: Path | None = None
 
 
 @dataclass
@@ -172,6 +173,10 @@ def configure_logging(settings_folder: Path) -> LogConfig:
     session_dir.mkdir(parents=True, exist_ok=True)
     log_file = session_dir / "session.log"
 
+    global LOGS_DIR, LOG_FILE
+    LOGS_DIR = logs_dir
+    LOG_FILE = log_file
+
     _ensure_utf8_console()
 
     formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(classname)s: %(message)s")
@@ -226,6 +231,12 @@ def configure_logging(settings_folder: Path) -> LogConfig:
     sys.excepthook = _excepthook
 
     return LogConfig(log_file=log_file)
+
+
+def get_log_dir() -> Path | None:
+    if LOG_FILE is None:
+        return None
+    return LOG_FILE.parent
 
 
 def get_logger(source: Any) -> ClassLoggerAdapter:

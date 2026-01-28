@@ -128,6 +128,9 @@
     "mcp_card_svg": {
       "enabled": false,
       "tool_preamble": "You can only use these tools: mcp_card_svg.CreateCard, mcp_card_svg.DrawCard, mcp_card_svg.DeleteCard. You MUST call mcp_card_svg.CreateCard first to get a guid; never invent or guess guids. mcp_card_svg.CreateCard returns a response with a guid field. Then pass that exact guid to mcp_card_svg.DrawCard. mcp_card_svg.DrawCard requires full SVG markup with a <svg> root sized 480x640 (portrait) or 640x480 (landscape). Never output SVG in assistant messages; only provide svg_instructions inside the mcp_card_svg.DrawCard tool call arguments. After mcp_card_svg.DrawCard succeeds, reply with a brief confirmation and do not call mcp_card_svg.DrawCard again unless the user requests changes. For images, use href values like resource:pic1-portrait.jpg or resource:pic2-landscape.jpg (from the resources folder). Do not embed base64 images in prompts. Do not call any other tools."
+    },
+    "mcp_card_web": {
+      "tool_preamble": "You can only use these tools: mcp_card_web.CreateCard, mcp_card_web.DrawCard, mcp_card_web.DeleteCard. You MUST call mcp_card_web.CreateCard first to get a guid; never invent or guess guids. mcp_card_web.CreateCard returns a response with a guid field. Then pass that exact guid to mcp_card_web.DrawCard. mcp_card_web.DrawCard accepts a single string that can be a URL, a local file path, or raw HTML. Never output HTML in assistant messages; only provide HTML inside the mcp_card_web.DrawCard tool call arguments. After mcp_card_web.DrawCard succeeds, reply with a brief confirmation and do not call it again unless the user requests changes."
     }
   },
   "tool_preamble_general": "Tools are available for this chat."

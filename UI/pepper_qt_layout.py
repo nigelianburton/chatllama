@@ -9,7 +9,7 @@ from Engine.logger import get_logger
 from App.window_controller import ExitIdleController
 from App.status_controller import StatusMessageController, attach_download_callback
 from App.window_state_controller import WindowStateController
-from MCP_Internal.card_svg import SVGCard
+from MCP_Internal.mcp_card_svg import SVGCard
 from UI.page_main import MainPageWidget
 
 
@@ -34,7 +34,7 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
         self._logger = get_logger(self)
         self._exit_idle = exit_idle
         self._log_file = log_file
-        self._cards: Dict[str, SVGCard] = {}
+        self._cards: Dict[str, QtWidgets.QWidget] = {}
         self._ui_bridge = UiBridge()
         self._exit_controller = ExitIdleController(
             log_file=self._log_file,
@@ -124,20 +124,33 @@ class ChatLlamaWindow(QtWidgets.QMainWindow):
             QtCore.Q_ARG(object, func),
         ) or self._ui_bridge.last_result
 
-    def _create_svg_card(self, guid: str, is_portrait: bool) -> SVGCard:
-        card = SVGCard(guid=guid, is_portrait=is_portrait)
+    def _create_card(self, guid: str, is_portrait: bool, card_type: str = "svg") -> QtWidgets.QWidget:
+        if card_type == "web":
+            from MCP_Internal.mcp_card_web import WebCard
+
+            card = WebCard(guid=guid, is_portrait=is_portrait)
+        else:
+            card = SVGCard(guid=guid, is_portrait=is_portrait)
         self._cards[guid] = card
         self._cards_layout.insertWidget(self._cards_layout.count() - 1, card)
         return card
 
-    def _delete_svg_card(self, card: SVGCard) -> None:
-        guid = card.guid
+    def _delete_card(self, card: QtWidgets.QWidget) -> None:
+        guid = getattr(card, "guid", None)
         self._cards_layout.removeWidget(card)
         card.deleteLater()
-        self._cards.pop(guid, None)
+        if guid is not None:
+            self._cards.pop(guid, None)
 
 
 def create_app(argv: list[str]):
+    QtCore.QCoreApplication.setAttribute(
+        QtCore.Qt.ApplicationAttribute.AA_ShareOpenGLContexts
+    )
+    try:
+        from PyQt6 import QtWebEngineWidgets  # noqa: F401
+    except Exception:
+        pass
     return QtWidgets.QApplication(argv)
 
 
@@ -198,7 +211,7 @@ def schedule_exit(window: ChatLlamaWindow, delay_ms: int) -> None:
 
 
 def get_mcp_hooks(window: ChatLlamaWindow):
-    return window._invoke_ui, window._create_svg_card, window._delete_svg_card
+    return window._invoke_ui, window._create_card, window._delete_card
 
 
 def refresh_mcp_tools(window: ChatLlamaWindow) -> None:

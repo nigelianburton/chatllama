@@ -1,0 +1,7 @@
+{
+  "messages": [
+    {
+      "text": "Create an SVG card and render an SVG that displays a Hello World heading. Use DrawCard with raw SVG content."
+    }
+  ]
+}
