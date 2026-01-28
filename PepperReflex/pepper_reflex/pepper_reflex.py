@@ -27,6 +27,7 @@ def index() -> rx.Component:
                 }
                 """
             ),
+            rx.window_event_listener(on_before_unload=BaseState.on_before_unload),
             navbar(),
             resizable.PanelGroup.create(
                 resizable.Panel.create(
@@ -34,9 +35,23 @@ def index() -> rx.Component:
                     id="settings",
                     order=1,
                     min_size=rx.cond(BaseState.show_settings, 15, 0),
-                    default_size=25,
+                    default_size=rx.cond(
+                        BaseState.show_settings,
+                        rx.cond(
+                            BaseState.show_chat & BaseState.show_cards,
+                            33,
+                            rx.cond(BaseState.show_chat | BaseState.show_cards, 50, 100),
+                        ),
+                        0,
+                    ),
+                    max_size=rx.cond(BaseState.show_settings, 100, 0),
+                    style={"display": rx.cond(BaseState.show_settings, "flex", "none")},
                 ),
-                resizable.PanelResizeHandle.create(width="4px", background_color="#373a40"),
+                rx.cond(
+                    BaseState.show_settings & (BaseState.show_chat | BaseState.show_cards),
+                    resizable.PanelResizeHandle.create(width="4px", background_color="#373a40"),
+                    rx.fragment(),
+                ),
                 resizable.Panel.create(
                     resizable.PanelGroup.create(
                         resizable.Panel.create(
@@ -44,23 +59,49 @@ def index() -> rx.Component:
                             id="chat",
                             order=1,
                             min_size=rx.cond(BaseState.show_chat, 20, 0),
-                            default_size=50,
+                            default_size=rx.cond(
+                                BaseState.show_chat,
+                                rx.cond(BaseState.show_cards, 50, 100),
+                                0,
+                            ),
+                            max_size=rx.cond(BaseState.show_chat, 100, 0),
+                            style={"display": rx.cond(BaseState.show_chat, "flex", "none")},
                         ),
-                        resizable.PanelResizeHandle.create(width="4px", background_color="#373a40"),
+                        rx.cond(
+                            BaseState.show_chat & BaseState.show_cards,
+                            resizable.PanelResizeHandle.create(width="4px", background_color="#373a40"),
+                            rx.fragment(),
+                        ),
                         resizable.Panel.create(
                             rx.cond(BaseState.show_cards, cards_view(), rx.fragment()),
                             id="cards",
                             order=2,
                             min_size=rx.cond(BaseState.show_cards, 15, 0),
-                            default_size=25,
+                            default_size=rx.cond(
+                                BaseState.show_cards,
+                                rx.cond(BaseState.show_chat, 50, 100),
+                                0,
+                            ),
+                            max_size=rx.cond(BaseState.show_cards, 100, 0),
+                            style={"display": rx.cond(BaseState.show_cards, "flex", "none")},
                         ),
                         direction="horizontal",
+                        key=rx.cond(
+                            BaseState.show_chat,
+                            rx.cond(BaseState.show_cards, "layout-inner-11", "layout-inner-10"),
+                            rx.cond(BaseState.show_cards, "layout-inner-01", "layout-inner-00"),
+                        ),
                     ),
                     id="main-content",
                     order=2,
                 ),
                 direction="horizontal",
                 height="100%",
+                key=rx.cond(
+                    BaseState.show_settings,
+                    rx.cond(BaseState.show_chat, rx.cond(BaseState.show_cards, "layout-111", "layout-110"), "layout-100"),
+                    rx.cond(BaseState.show_chat, rx.cond(BaseState.show_cards, "layout-011", "layout-010"), "layout-001"),
+                ),
             ),
             direction="column",
             height="100vh",
@@ -74,4 +115,4 @@ def index() -> rx.Component:
 
 
 app = rx.App(style={"font_family": FONT_SANS})
-app.add_page(index, route="/", on_load=BaseState.poll_control_service)
+app.add_page(index, route="/", on_load=BaseState.init_control_service)

@@ -35,7 +35,7 @@ def settings_view() -> rx.Component:
                                     "Model: ",
                                     BaseState.selected_model,
                                     color=rx.cond(
-                                        SettingsState.model_ready,
+                                        BaseState.model_ready,
                                         MODEL_READY_COLOR,
                                         TEXT_MUTED,
                                     ),
@@ -56,6 +56,7 @@ def settings_view() -> rx.Component:
                                         variant="solid",
                                         color_scheme="blue",
                                         width="auto",
+                                        flex_shrink="0",
                                     ),
                                     width="100%",
                                     align="center",
@@ -205,6 +206,45 @@ def settings_view() -> rx.Component:
                             )
                         ),
                         value="logging",
+                        **ACCORDION_ITEM_STYLE,
+                    ),
+                    rx.accordion.item(
+                        rx.accordion.header(
+                            rx.accordion.trigger(
+                                rx.hstack(
+                                    rx.text("Diagnostics"),
+                                    rx.spacer(),
+                                    rx.button(
+                                        "Copy all",
+                                        size="1",
+                                        variant="soft",
+                                        on_click=[
+                                            rx.set_clipboard(BaseState.diagnostics_text),
+                                            rx.stop_propagation,
+                                        ],
+                                    ),
+                                    width="100%",
+                                    align="center",
+                                ),
+                                **ACCORDION_TRIGGER_STYLE,
+                            ),
+                        ),
+                        rx.accordion.content(
+                            rx.vstack(
+                                rx.text("Control service: ", BaseState.control_service_status, color=TEXT_MUTED),
+                                rx.text("Control status: ", BaseState.model_state, color=TEXT_MUTED),
+                                rx.text("Active model: ", BaseState.model_name, color=TEXT_MUTED),
+                                rx.text(
+                                    "Last poll: ",
+                                    rx.cond(BaseState.last_poll_ts != "", BaseState.last_poll_ts, "-"),
+                                    color=TEXT_MUTED,
+                                ),
+                                rx.text("Autorun: ", BaseState.autorun_status, color=TEXT_MUTED),
+                                spacing="2",
+                                width="100%",
+                            )
+                        ),
+                        value="diagnostics",
                         **ACCORDION_ITEM_STYLE,
                     ),
                     type="multiple",

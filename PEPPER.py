@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import ctypes
 import json
 import os
 import socket
+import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
@@ -348,7 +351,37 @@ def main() -> None:
         logger.info("Single-instance: exiting secondary instance")
         return
 
+    control_process: subprocess.Popen | None = None
+
+    def _start_control_service() -> None:
+        nonlocal control_process
+        if control_process is not None and control_process.poll() is None:
+            return
+        service_path = Path(__file__).resolve().parent / "Engine" / "control_service.py"
+        logger.info("Starting control service: %s", service_path)
+        control_process = subprocess.Popen([sys.executable, str(service_path)])
+
+    def _stop_control_service() -> None:
+        nonlocal control_process
+        if control_process is None:
+            return
+        if control_process.poll() is not None:
+            control_process = None
+            return
+        logger.info("Stopping control service (pid=%s)", control_process.pid)
+        control_process.terminate()
+        try:
+            control_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            logger.warning("Control service did not exit; killing")
+            control_process.kill()
+        control_process = None
+
+    _start_control_service()
+    atexit.register(_stop_control_service)
+
     app = QtWidgets.QApplication(sys.argv)
+    app.aboutToQuit.connect(_stop_control_service)
     window = ChatLlamaWindow(
         exit_idle=(args.autorun is not None),  # Set exit_idle=True if autorun is requested
         log_file=config.log_file,
