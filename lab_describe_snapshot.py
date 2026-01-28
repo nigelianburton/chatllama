@@ -26,7 +26,15 @@ except ImportError as e:
     sys.exit(1)
 
 # Get screencap + card paths
-provided_paths = [Path(p) for p in sys.argv[1:]]
+args = sys.argv[1:]
+output_override: Path | None = None
+if "--output" in args:
+    idx = args.index("--output")
+    if idx + 1 < len(args):
+        output_override = Path(args[idx + 1])
+        del args[idx : idx + 2]
+
+provided_paths = [Path(p) for p in args]
 if not provided_paths:
     logs_folder = Path(r"D:\_GITN\chatllama\pepper_settings\logs")
     screencaps = sorted(logs_folder.glob("*/screencap.png"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -112,6 +120,8 @@ def _describe_image(image_path: Path, prompt: str) -> str:
 
 
 def _description_path_from_screencap(path: Path) -> Path:
+    if output_override is not None:
+        return output_override
     return path.with_name("description.txt")
 
 
