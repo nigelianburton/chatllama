@@ -6,13 +6,16 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from constants import SETTINGS_DEV
 
 
 LOGS_DIR: Path | None = None
 LOG_FILE: Path | None = None
+LOG_FORMATTER: logging.Formatter | None = None
+
+NOISY_LOGGERS = {"fastmcp", "mcp", "uvicorn", "pydocket", "redis", "httpx", "httpcore"}
 
 
 @dataclass
@@ -165,6 +168,41 @@ class _CollapsingHandler(logging.Handler):
             super().close()
 
 
+class _CallbackHandler(logging.Handler):
+    def __init__(self, callback: Callable[[str], None]) -> None:
+        super().__init__()
+        self._callback = callback
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            message = self.format(record)
+            self._callback(message)
+        except Exception:
+            self.handleError(record)
+
+
+def _build_default_filters() -> list[logging.Filter]:
+    return [
+        _ClassnameFilter(),
+        _QuietFilter(NOISY_LOGGERS),
+        _DowngradeSseErrors(),
+    ]
+
+
+def add_log_listener(callback: Callable[[str], None]) -> logging.Handler:
+    handler = _CallbackHandler(callback)
+    formatter = LOG_FORMATTER or logging.Formatter("%(asctime)s [%(levelname)s] %(classname)s: %(message)s")
+    handler.setFormatter(formatter)
+    for log_filter in _build_default_filters():
+        handler.addFilter(log_filter)
+    logging.getLogger().addHandler(handler)
+    return handler
+
+
+def remove_log_listener(handler: logging.Handler) -> None:
+    logging.getLogger().removeHandler(handler)
+
+
 def configure_logging(settings_folder: Path) -> LogConfig:
     logs_dir = settings_folder / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -180,6 +218,8 @@ def configure_logging(settings_folder: Path) -> LogConfig:
     _ensure_utf8_console()
 
     formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(classname)s: %(message)s")
+    global LOG_FORMATTER
+    LOG_FORMATTER = formatter
 
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
@@ -191,21 +231,16 @@ def configure_logging(settings_folder: Path) -> LogConfig:
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
 
-    classname_filter = _ClassnameFilter()
-    quiet_filter = _QuietFilter({"fastmcp", "mcp", "uvicorn", "pydocket", "redis", "httpx", "httpcore"})
-    sse_filter = _DowngradeSseErrors()
+    filters = _build_default_filters()
     collapsing_file_handler = _CollapsingHandler(file_handler)
     collapsing_console_handler = _CollapsingHandler(console_handler)
 
     collapsing_file_handler.setFormatter(formatter)
     collapsing_console_handler.setFormatter(formatter)
 
-    collapsing_file_handler.addFilter(classname_filter)
-    collapsing_console_handler.addFilter(classname_filter)
-    collapsing_file_handler.addFilter(quiet_filter)
-    collapsing_console_handler.addFilter(quiet_filter)
-    collapsing_file_handler.addFilter(sse_filter)
-    collapsing_console_handler.addFilter(sse_filter)
+    for log_filter in filters:
+        collapsing_file_handler.addFilter(log_filter)
+        collapsing_console_handler.addFilter(log_filter)
 
     root_logger.addHandler(collapsing_file_handler)
     root_logger.addHandler(collapsing_console_handler)
@@ -213,7 +248,7 @@ def configure_logging(settings_folder: Path) -> LogConfig:
     atexit.register(collapsing_file_handler.flush)
     atexit.register(collapsing_console_handler.flush)
 
-    for noisy in ("fastmcp", "mcp", "uvicorn", "pydocket", "redis", "httpx", "httpcore"):
+    for noisy in NOISY_LOGGERS:
         logging.getLogger(noisy).setLevel(logging.INFO)
 
     stderr_logger = logging.getLogger("STDERR")

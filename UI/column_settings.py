@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PyQt6 import QtCore, QtWidgets
 
-from Engine.logger import get_logger
+from Engine.logger import add_log_listener, get_logger, remove_log_listener
 from App.settings_store import SettingsStore
 from App.model_controller import ModelController
 from App.mcp_controller import MCPController
@@ -16,6 +16,7 @@ from UI.settings_local_models import SettingsLocalModels
 from UI.settings_local_mcps import SettingsLocalMcps
 from UI.settings_built_in_mcps import SettingsBuiltInMcps
 from UI.settings_tools_preambles import SettingsToolsPreambles
+from UI.setting_log import SettingLog
 from UI.mcp_settings_panel import MCPSettingsPanel
 
 
@@ -54,6 +55,9 @@ class ColumnSettingsWidgets:
         self.tool_preamble_general_edit = self.tool_preamble_widget.general_item.text_edit
         self.tool_preamble_general_save = self.tool_preamble_widget.general_item.save_button
 
+        self.setting_log = SettingLog()
+        self.layout.addWidget(self.setting_log)
+
         self.placeholder = QtWidgets.QLabel("Settings")
         self.placeholder.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.placeholder.setStyleSheet("background-color: rgba(255, 255, 255, 0.4); border: 1px dashed #999;")
@@ -90,6 +94,9 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         self._model_status = self._widgets.model_status
         self._model_combo = self._widgets.model_combo
         self._load_button = self._widgets.load_button
+        self._setting_log = self._widgets.setting_log
+        self._log_handler = add_log_listener(self._setting_log.append_line)
+        self.destroyed.connect(self._on_destroyed)
 
         self._model_combo.currentIndexChanged.connect(self._refresh_load_button)
         self._load_button.clicked.connect(self._on_load_clicked)
@@ -113,6 +120,11 @@ class ColumnSettingsWidget(QtWidgets.QWidget):
         self._register_model_discovery()
         self._mcp_panel.refresh_all()
         self._load_tool_preamble()
+
+    def _on_destroyed(self, *_: object) -> None:
+        if self._log_handler is not None:
+            remove_log_listener(self._log_handler)
+            self._log_handler = None
 
     def _load_tool_preamble(self) -> None:
         general = self._settings_store.load_tool_preamble_general()

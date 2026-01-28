@@ -4,7 +4,15 @@ from typing import Callable
 
 from PyQt6 import QtCore, QtWidgets
 
-from constants import TOGGLE_DISABLED_COLOR, TOGGLE_OFF_COLOR, TOGGLE_ON_COLOR
+from UI.ui_constants import (
+    ACCORDION_COLLAPSED_BG_COLOR,
+    ACCORDION_COLLAPSED_TEXT_COLOR,
+    ACCORDION_EXPANDED_BG_COLOR,
+    ACCORDION_EXPANDED_TEXT_COLOR,
+    TOGGLE_DISABLED_COLOR,
+    TOGGLE_OFF_COLOR,
+    TOGGLE_ON_COLOR,
+)
 
 
 class BuiltInMcpEntryWidget(QtWidgets.QFrame):
@@ -101,8 +109,8 @@ class SettingsBuiltInMcps(QtWidgets.QFrame):
         self._toggle_button.setText("settings built in mcps")
         self._toggle_button.setCheckable(True)
         self._toggle_button.setChecked(False)
-        self._toggle_button.setStyleSheet("font-weight: bold; color: #3a3a3a;")
         self._toggle_button.toggled.connect(self._on_toggled)
+        self._apply_toggle_style(self._toggle_button.isChecked())
         header_row.addWidget(self._toggle_button)
 
         header_row.addStretch(1)
@@ -139,6 +147,14 @@ class SettingsBuiltInMcps(QtWidgets.QFrame):
         self._content_widget.setVisible(checked)
         self._toggle_button.setArrowType(
             QtCore.Qt.ArrowType.DownArrow if checked else QtCore.Qt.ArrowType.RightArrow
+        )
+        self._apply_toggle_style(checked)
+
+    def _apply_toggle_style(self, expanded: bool) -> None:
+        text_color = ACCORDION_EXPANDED_TEXT_COLOR if expanded else ACCORDION_COLLAPSED_TEXT_COLOR
+        bg_color = ACCORDION_EXPANDED_BG_COLOR if expanded else ACCORDION_COLLAPSED_BG_COLOR
+        self._toggle_button.setStyleSheet(
+            f"QToolButton {{ font-weight: bold; color: {text_color}; background: {bg_color}; }}"
         )
 
     def set_endpoint(self, ip: str, port: str) -> None:

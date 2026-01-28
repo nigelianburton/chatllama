@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from constants import HEADER_COLOR_FAULT, HEADER_COLOR_LOADING, HEADER_COLOR_READY
+from UI.ui_constants import HEADER_COLOR_FAULT, HEADER_COLOR_LOADING, HEADER_COLOR_READY
 
 
 def header_colors_for_state(state: str) -> tuple[str, str]:

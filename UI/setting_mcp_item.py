@@ -5,7 +5,8 @@ from typing import Callable
 
 from PyQt6 import QtWidgets
 
-from constants import MCP_LABEL_WIDTH, MCP_PORT_INPUT_WIDTH, TOGGLE_DISABLED_COLOR, TOGGLE_OFF_COLOR, TOGGLE_ON_COLOR
+from constants import MCP_LABEL_WIDTH, MCP_PORT_INPUT_WIDTH
+from UI.ui_constants import TOGGLE_DISABLED_COLOR, TOGGLE_OFF_COLOR, TOGGLE_ON_COLOR
 
 
 class SettingsMcpItem(QtWidgets.QFrame):

@@ -8,7 +8,15 @@ from PyQt6 import QtCore, QtWidgets
 from UI.column_chat import ChatColumnWidget
 from UI.column_cards import ColumnCardsWidget
 from UI.column_settings import ColumnSettingsWidget
-from constants import TOGGLE_OFF_COLOR, TOGGLE_ON_COLOR
+from UI.toolbar import MainToolbarWidget
+from UI.ui_constants import (
+    COLUMN_CARDS_BG,
+    COLUMN_CHAT_BG,
+    COLUMN_SETTINGS_BG,
+    MAIN_PAGE_BG,
+    TOGGLE_OFF_COLOR,
+    TOGGLE_ON_COLOR,
+)
 from Engine.logger import get_logger
 
 
@@ -60,36 +68,17 @@ class MainPageWidget(QtWidgets.QWidget):
     def __init__(self, settings_folder: Path) -> None:
         super().__init__()
         self._logger = get_logger(self)
+        self.setStyleSheet(f"background-color: {MAIN_PAGE_BG};")
 
         main_layout = QtWidgets.QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        top_toolbar = QtWidgets.QToolBar()
-        top_toolbar.setMovable(False)
-        self.model_title_label = QtWidgets.QLabel("Model: None")
-        self.model_title_label.setStyleSheet("font-weight: bold;")
-        top_toolbar.addWidget(self.model_title_label)
-
-        toolbar_spacer = QtWidgets.QWidget()
-        toolbar_spacer.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred
-        )
-        top_toolbar.addWidget(toolbar_spacer)
-
-        self.status_label = QtWidgets.QLabel("50%")
-        self.status_label.setFixedWidth(50)
-        self.status_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
-        self.status_label.setVisible(False)
-        top_toolbar.addWidget(self.status_label)
-
-        self.progress_bar = QtWidgets.QProgressBar()
-        self.progress_bar.setFixedWidth(150)
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        top_toolbar.addWidget(self.progress_bar)
-        self.top_toolbar = top_toolbar
-        main_layout.addWidget(top_toolbar)
+        self.top_toolbar = MainToolbarWidget()
+        self.model_title_label = self.top_toolbar.model_title_label
+        self.status_label = self.top_toolbar.status_label
+        self.progress_bar = self.top_toolbar.progress_bar
+        main_layout.addWidget(self.top_toolbar)
 
         self._toggle_style = (
             f"QToolButton {{ background: {TOGGLE_OFF_COLOR}; padding: 4px; }}"
@@ -104,14 +93,14 @@ class MainPageWidget(QtWidgets.QWidget):
         self._toggle_buttons: Dict[str, QtWidgets.QToolButton] = {}
 
         self.settings_container = ColumnSettingsWidget(settings_folder)
-        self._add_column("Settings", "#f7e0e0", content_widget=self.settings_container)
+        self._add_column("Settings", COLUMN_SETTINGS_BG, content_widget=self.settings_container)
 
         self.chat_container = ChatColumnWidget()
-        self._add_column("Chat", "#e0f7e0", content_widget=self.chat_container)
+        self._add_column("Chat", COLUMN_CHAT_BG, content_widget=self.chat_container)
 
         self.cards_container = ColumnCardsWidget()
         self.cards_layout = self.cards_container.cards_layout
-        self._add_column("Cards", "#e0e8f7", content_widget=self.cards_container)
+        self._add_column("Cards", COLUMN_CARDS_BG, content_widget=self.cards_container)
 
         self._apply_splitter_sizes()
 
@@ -144,7 +133,7 @@ class MainPageWidget(QtWidgets.QWidget):
         toggle.setChecked(True)
         toggle.setStyleSheet(self._toggle_style)
         toggle.clicked.connect(lambda checked, n=name: on_toggle(checked))
-        self.top_toolbar.addWidget(toggle)
+        self.top_toolbar.add_toggle_button(toggle)
         self._toggle_buttons[name] = toggle
 
     def _apply_splitter_sizes(self) -> None:

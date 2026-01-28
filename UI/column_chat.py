@@ -9,7 +9,8 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from Engine.logger import get_logger
 from App.chat_controller import ChatController
 from UI.column_chat_messages import MessageType, MessageBubble, create_message_widget
-from constants import SHOW_SAMPLE_MESSAGES, TOGGLE_OFF_COLOR, TOGGLE_ON_COLOR
+from constants import SHOW_SAMPLE_MESSAGES
+from UI.ui_constants import TOGGLE_OFF_COLOR, TOGGLE_ON_COLOR
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}

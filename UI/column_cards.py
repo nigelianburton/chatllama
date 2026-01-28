@@ -3,7 +3,7 @@ from __future__ import annotations
 from PyQt6 import QtCore, QtWidgets
 
 from Engine.logger import get_logger
-from constants import TOGGLE_OFF_COLOR, TOGGLE_ON_COLOR
+from UI.ui_constants import TOGGLE_OFF_COLOR, TOGGLE_ON_COLOR
 
 
 class ColumnCardsWidget(QtWidgets.QWidget):

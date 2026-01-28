@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from PyQt6 import QtCore, QtWidgets
 
-from UI.settiing_mcp_preamble_item import SettingsMcpPreambleItem
 from UI.ui_constants import (
     ACCORDION_COLLAPSED_BG_COLOR,
     ACCORDION_COLLAPSED_TEXT_COLOR,
@@ -11,11 +10,14 @@ from UI.ui_constants import (
 )
 
 
-class SettingsToolsPreambles(QtWidgets.QFrame):
-    def __init__(self) -> None:
+class SettingLog(QtWidgets.QFrame):
+    log_appended = QtCore.pyqtSignal(str)
+
+    def __init__(self, label: str = "setting_log") -> None:
         super().__init__()
+
         self.setStyleSheet(
-            "QFrame { background: #f9f9ff; border: 1px solid #c6d3e8; border-radius: 6px; }"
+            "QFrame { background: #eef4ff; border: 1px solid #c6d3e8; border-radius: 6px; }"
         )
 
         layout = QtWidgets.QVBoxLayout(self)
@@ -25,7 +27,7 @@ class SettingsToolsPreambles(QtWidgets.QFrame):
         self._toggle_button = QtWidgets.QToolButton()
         self._toggle_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._toggle_button.setArrowType(QtCore.Qt.ArrowType.RightArrow)
-        self._toggle_button.setText("tool preamble")
+        self._toggle_button.setText(label)
         self._toggle_button.setCheckable(True)
         self._toggle_button.setChecked(False)
         self._toggle_button.toggled.connect(self._on_toggled)
@@ -35,13 +37,26 @@ class SettingsToolsPreambles(QtWidgets.QFrame):
         self._content_widget = QtWidgets.QWidget()
         content_layout = QtWidgets.QVBoxLayout(self._content_widget)
         content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(6)
+        content_layout.setSpacing(8)
 
-        self.general_item = SettingsMcpPreambleItem("General tools preamble")
-        content_layout.addWidget(self.general_item)
+        self.text_edit = QtWidgets.QPlainTextEdit()
+        self.text_edit.setReadOnly(True)
+        self.text_edit.setMaximumHeight(256)
+        self.text_edit.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.text_edit.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.text_edit.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        content_layout.addWidget(self.text_edit)
 
         self._content_widget.setVisible(False)
         layout.addWidget(self._content_widget)
+
+        self.log_appended.connect(self._append_line)
+
+    def append_line(self, text: str) -> None:
+        self.log_appended.emit(text)
+
+    def _append_line(self, text: str) -> None:
+        self.text_edit.appendPlainText(text)
 
     def _on_toggled(self, checked: bool) -> None:
         self._content_widget.setVisible(checked)
